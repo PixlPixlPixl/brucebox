@@ -593,16 +593,15 @@ Implement this in deliberate stages. Each stage should produce a working result 
 
 ### Stage 1 — Establish the Rust and GPUI Kit foundation
 
-1. Create a clean Brucebox repository.
-2. Install and configure the Rust toolchain.
-3. Create the Cargo workspace.
-4. Add GPUI Kit 0.9.0.
-5. Add Cordis-RS 0.11.1.
-6. Verify that the dependency graph resolves without duplicate GPUI or Cordis versions.
-7. Create the smallest possible GPUI application.
-8. Open a native window and render a basic view.
-9. Verify Wayland operation on Linux.
-10. Commit the dependency lockfile.
+1. Install and configure the Rust toolchain.
+2. Create the Cargo workspace.
+3. Add GPUI Kit 0.9.0.
+4. Add Cordis-RS 0.11.1.
+5. Verify that the dependency graph resolves without duplicate GPUI or Cordis versions.
+6. Create the smallest possible GPUI application.
+7. Open a native window and render a basic view.
+8. Verify Wayland operation on Linux.
+9. Commit the dependency lockfile.
 
 **Exit condition:** Brucebox launches as a minimal native GPUI application using GPUI Kit.
 
