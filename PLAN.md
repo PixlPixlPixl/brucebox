@@ -34,6 +34,11 @@ Observed on main during plan creation:
 
 Treat this as a snapshot, not a reason to preserve temporary demo implementation. Re-check the actual tree, lockfile, dependency source and current build before each milestone; do not assume files or APIs are unchanged.
 
+## Progress
+
+- **Step 0 — bootstrap verified.** Build and launch re-checked on Rust 1.99.1 with gpui-kit 0.9.0 (GPUI Base dock, custom renderer). Launch was verified on a private Xvfb display because this environment has no Wayland socket. Baseline decisions, including why gpui-kit's `test-support` cannot be enabled here, are recorded in `docs/adr/0001-foundation-baseline-and-panel-catalog.md`.
+- **Step 1 — panel catalog and workspace decoupling done.** Namespaced `PluginId`/`PanelTypeId`/`PanelInstanceId`; a catalog of descriptors (owner plugin, title, icon, multiplicity, factory, restore payload) that rejects duplicate ids and contributions from unregistered plugins; a bridge from the catalog into GPUI Base Dock's own panel registry; layout planning kept separate from execution; missing panels become state-preserving placeholders with diagnostics; workspace and dock construction resolve contribution ids only. The `brucebox.demo.*` proving panels stay registered through the same path until the real plugins load in steps 5 and 7. 22 unit tests, Clippy clean. Next: step 2, workspace persistence and default preset.
+
 ## Architecture / responsibility boundaries
 
 ### Host

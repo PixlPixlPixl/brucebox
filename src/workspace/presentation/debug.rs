@@ -1,15 +1,16 @@
 use std::rc::Rc;
+use std::sync::Arc;
 
-use gpui_kit::*;
 use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
 
 use gpui_kit::base::dock::{
-    DockAreaRenderer,
-    DropIndicator,
-    NodeId,
-    TabGroupContext,
+    DockAreaRenderer, DropIndicator, NodeId, PanelState, PanelView, TabGroupContext,
     TabGroupRenderer,
 };
+
+use crate::workspace::catalog;
+use crate::workspace::panels::missing::MissingPanel;
 
 #[derive(Default)]
 pub struct DebugDockRenderer;
@@ -22,11 +23,7 @@ struct TabDragPreview {
 }
 
 impl Render for TabDragPreview {
-    fn render(
-        &mut self,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
             .px(px(12.))
             .py(px(8.))
@@ -37,11 +34,7 @@ impl Render for TabDragPreview {
 }
 
 impl DockAreaRenderer for DebugDockRenderer {
-    fn frame(
-        &self,
-        _: &mut Window,
-        _: &mut App,
-    ) -> Stateful<Div> {
+    fn frame(&self, _: &mut Window, _: &mut App) -> Stateful<Div> {
         div()
             .id("brucebox-dock-frame")
             .size_full()
@@ -50,11 +43,7 @@ impl DockAreaRenderer for DebugDockRenderer {
             .overflow_hidden()
     }
 
-    fn center_frame(
-        &self,
-        _: &mut Window,
-        _: &mut App,
-    ) -> Stateful<Div> {
+    fn center_frame(&self, _: &mut Window, _: &mut App) -> Stateful<Div> {
         div()
             .id("brucebox-dock-center")
             .flex()
@@ -63,13 +52,7 @@ impl DockAreaRenderer for DebugDockRenderer {
             .overflow_hidden()
     }
 
-    fn split_frame(
-        &self,
-        node: NodeId,
-        _: Axis,
-        _: &mut Window,
-        _: &mut App,
-    ) -> Stateful<Div> {
+    fn split_frame(&self, node: NodeId, _: Axis, _: &mut Window, _: &mut App) -> Stateful<Div> {
         div()
             .id(("brucebox-dock-split", node.as_u64()))
             .size_full()
@@ -82,15 +65,27 @@ impl DockAreaRenderer for DebugDockRenderer {
     fn tab_group_renderer(&self) -> Rc<dyn TabGroupRenderer> {
         Rc::new(DebugTabGroupRenderer)
     }
+
+    /// Show a panel the catalog cannot build instead of drawing nothing.
+    ///
+    /// The placeholder keeps the persisted state, so a layout naming a plugin
+    /// this build does not have survives the next save.
+    fn build_placeholder(
+        &self,
+        state: &PanelState,
+        _: &mut Window,
+        cx: &mut App,
+    ) -> Option<Arc<dyn PanelView>> {
+        Some(MissingPanel::for_state_view(
+            state,
+            "The plugin that provides this panel is not loaded, or failed to load.",
+            cx,
+        ))
+    }
 }
 
 impl TabGroupRenderer for DebugTabGroupRenderer {
-    fn frame(
-        &self,
-        group: &TabGroupContext,
-        _: &mut Window,
-        _: &mut App,
-    ) -> Stateful<Div> {
+    fn frame(&self, group: &TabGroupContext, _: &mut Window, _: &mut App) -> Stateful<Div> {
         div()
             .id(("brucebox-tab-group", group.node().as_u64()))
             .size_full()
@@ -101,12 +96,7 @@ impl TabGroupRenderer for DebugTabGroupRenderer {
             .bg(rgb(0x171b22))
     }
 
-    fn content_frame(
-        &self,
-        group: &TabGroupContext,
-        _: &mut Window,
-        _: &mut App,
-    ) -> Stateful<Div> {
+    fn content_frame(&self, group: &TabGroupContext, _: &mut Window, _: &mut App) -> Stateful<Div> {
         div()
             .id(("brucebox-tab-content", group.node().as_u64()))
             .relative()
@@ -116,12 +106,7 @@ impl TabGroupRenderer for DebugTabGroupRenderer {
             .overflow_hidden()
     }
 
-    fn render_tab_bar(
-        &self,
-        group: &TabGroupContext,
-        _: &mut Window,
-        cx: &mut App,
-    ) -> AnyElement {
+    fn render_tab_bar(&self, group: &TabGroupContext, _: &mut Window, cx: &mut App) -> AnyElement {
         let active_index = group.active_ix();
 
         let tabs = group
@@ -130,7 +115,7 @@ impl TabGroupRenderer for DebugTabGroupRenderer {
             .enumerate()
             .filter(|(_, panel)| panel.visible(cx))
             .map(|(index, panel)| {
-                let title = panel_title(panel.panel_name(cx));
+                let title = panel_title(panel.panel_name(cx), cx);
                 let preview_title = title.clone();
                 let selected = index == active_index;
 
@@ -199,12 +184,15 @@ impl TabGroupRenderer for DebugTabGroupRenderer {
     }
 }
 
-fn panel_title(name: &str) -> SharedString {
-    match name {
-        "brucebox.demo.welcome" => "Welcome",
-        "brucebox.demo.scratch" => "Scratch Pad",
-        "brucebox.demo.activity" => "Activity",
-        other => other,
-    }
-    .into()
+/// The tab title for a panel name.
+///
+/// Ownership metadata lives in the catalog, not in the renderer, so a
+/// contribution's title is available without the renderer knowing the
+/// contribution. A name the catalog does not know is shown as written, which is
+/// what a panel from a missing plugin looks like.
+fn panel_title(panel_name: &str, cx: &App) -> SharedString {
+    catalog::try_catalog(cx)
+        .and_then(|catalog| catalog.panel_by_name(panel_name))
+        .map(|descriptor| descriptor.title().clone())
+        .unwrap_or_else(|| panel_name.to_owned().into())
 }
