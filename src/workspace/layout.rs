@@ -154,6 +154,10 @@ pub enum WorkspaceDiagnostic {
         panel_type: PanelTypeId,
         reason: SharedString,
     },
+    /// A stored workspace could not be restored, so the default layout was used.
+    RestoreFailed { reason: SharedString },
+    /// A workspace document could not be written.
+    SaveFailed { reason: SharedString },
 }
 
 impl fmt::Display for WorkspaceDiagnostic {
@@ -169,6 +173,13 @@ impl fmt::Display for WorkspaceDiagnostic {
             ),
             Self::PanelCreateFailed { panel_type, reason } => {
                 write!(f, "panel `{panel_type}` could not be created: {reason}")
+            }
+            Self::RestoreFailed { reason } => write!(
+                f,
+                "the saved workspace could not be restored ({reason}); the default layout was used"
+            ),
+            Self::SaveFailed { reason } => {
+                write!(f, "the workspace layout could not be saved: {reason}")
             }
         }
     }

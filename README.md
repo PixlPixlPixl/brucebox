@@ -19,6 +19,11 @@ Completed so far:
 - Step 1 — namespaced plugin/panel-type/panel-instance ids, a panel catalog with
   descriptors and factories, layout planning, missing-panel placeholders, and a
   workspace that builds its dock area from contribution ids.
+- Step 2 — the layout is the user's: a versioned workspace document is restored on
+  launch, saved with debounced writes, and reset explicitly with `ctrl-shift-r`.
+  Panel instance identity and plugin state persist even when the owning plugin is
+  missing. Decisions in
+  [`docs/adr/0002-workspace-persistence.md`](docs/adr/0002-workspace-persistence.md).
 
 ## Build and run
 
@@ -43,6 +48,25 @@ DISPLAY=:120 cargo run
 Mesa may warn about missing DRI3 support; software rendering is fine for the
 workspace UI.
 
+There is no window manager or xdotool on such a display. The `scripts/x11-*.py`
+helpers drive it through XTEST and X11 client messages instead: close a window
+gracefully (`x11-close-window.py`), press a shortcut (`x11-key.py`), or click
+(`x11-click.py`).
+
+## Workspace state
+
+Layouts are saved as
+`<user data dir>/workspaces/<workspace-id>.json`; set `BRUCEBOX_DATA_DIR` to use a
+different root (tests and parallel dev builds do). The default root is
+`%APPDATA%/brucebox` on Windows, `~/Library/Application Support/brucebox` on
+macOS, and `$XDG_DATA_HOME/brucebox` (or `~/.local/share/brucebox`) elsewhere.
+
+- First launch builds the default preset; later launches restore the saved layout.
+- Saves are debounced and coalesced, and flushed when the window closes.
+- A document that cannot be restored is moved aside to `.json.invalid` and the
+  default preset is used, so a newer build's layout is never silently overwritten.
+- `ctrl-shift-r` resets the workspace to the default preset.
+
 ## Layout
 
 ```text
@@ -55,7 +79,9 @@ src/
     ├── catalog.rs          panel descriptors, plugin records, dock bridge
     ├── layout.rs           layout data and planning (pure)
     ├── preset.rs           first-run layout data
-    ├── dock.rs             live GPUI Base Dock area
+    ├── document.rs         the versioned, persisted workspace document
+    ├── store.rs            where that document lives and how it is written
+    ├── dock.rs             live GPUI Base Dock area, save lifecycle, reset
     ├── contributions.rs    contributions this build ships
     ├── panels/             host panel handle, placeholder, proving panels
     └── presentation/       replaceable dock renderer

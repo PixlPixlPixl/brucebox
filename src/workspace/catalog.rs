@@ -469,8 +469,26 @@ pub fn register_contribution(
     let panel_name = panel_type.as_str();
     register_dock_panel(cx, panel_name, move |build, window, cx| {
         let state = build.state().clone();
-        let instance = PanelInstanceId::next();
-        match restore.create(instance, Some(state.clone()), window, cx) {
+        let (instance, panel_state, recorded_owner) =
+            crate::workspace::panels::host::restore_state(&state);
+
+        // A leaf that says it came from another plugin is not ours to restore:
+        // handing that payload to this factory would interpret another plugin's
+        // state with this plugin's schema.
+        if let Some(owner) = recorded_owner
+            && owner != restore.plugin().as_str()
+        {
+            return crate::workspace::panels::missing::view_for_state(
+                &state,
+                format!(
+                    "this panel was saved by plugin `{owner}` but is now provided by `{}`",
+                    restore.plugin()
+                ),
+                cx,
+            );
+        }
+
+        match restore.create(instance, Some(panel_state), window, cx) {
             Ok(view) => view,
             Err(error) => {
                 crate::workspace::panels::missing::view_for_state(&state, error.to_string(), cx)

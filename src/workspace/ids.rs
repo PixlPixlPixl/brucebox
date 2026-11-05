@@ -236,6 +236,15 @@ impl PanelInstanceId {
         Self(NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed))
     }
 
+    /// Restore a persisted instance id.
+    ///
+    /// The mint counter is moved past the restored id, so a later
+    /// [`next`](Self::next) cannot reissue an id that is already on screen.
+    pub fn adopt(raw: u64) -> Self {
+        NEXT_INSTANCE.fetch_max(raw.saturating_add(1), Ordering::Relaxed);
+        Self(raw)
+    }
+
     /// The raw value, for persisted state.
     pub fn get(self) -> u64 {
         self.0
