@@ -1,3 +1,5 @@
+> **Superseded — do not use as active implementation instructions.** This roadmap predates the switch to independently compiled, runtime-loaded native plugin folders and contains obsolete guidance about compiling plugins into the host. The active execution brief is [PLAN.md](PLAN.md); [SPEC.md](SPEC.md) is the normative architecture contract. This file is retained only as historical source material.
+
 # Brucebox Foundation Roadmap
 
 ## Purpose
