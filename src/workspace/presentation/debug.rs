@@ -1,6 +1,8 @@
 use std::rc::Rc;
 
 use gpui_kit::*;
+use gpui_kit::prelude::FluentBuilder;
+
 use gpui_kit::base::dock::{
     DockAreaRenderer,
     DropIndicator,
