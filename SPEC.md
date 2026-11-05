@@ -719,132 +719,117 @@ This is the proof that independently loaded plugins can contribute native UI, pu
 
 ## 9. Initial implementation plan
 
-Implement this in deliberate stages. Each stage should produce a working result that can be checked before spending significant time polishing it. Prefer vertical slices of the actual application over throwaway tests or prototypes.
+Implement these stages in order. The current native GPUI/DockArea smoke test is already the bootstrap; verify it before continuing. Each stage should produce a usable result, be checked, and remain part of the product. Use real Agent Chat and Git features as plugin examples; do not create disposable test-only plugins.
 
-### Stage 1 — Establish the Rust and GPUI Kit foundation
+### Stage 0 — Verify the existing native foundation
 
-1. Verify the pinned Rust toolchain and project configuration.
-2. Establish the Cargo workspace for host/framework crates only.
-3. Add GPUI Kit 0.9.0.
-4. Verify the dependency graph resolves without duplicate GPUI versions.
-5. Create the smallest possible GPUI application.
-6. Open a native window and render a basic view.
-7. Verify Wayland operation on Linux.
-8. Commit the dependency lockfile.
+1. Re-check the pinned Rust toolchain, Cargo.lock and GPUI Kit 0.9.0 APIs.
+2. Confirm the current native window and GPUI Kit Base DockArea still build and launch.
+3. Keep the custom DockArea renderer replaceable; do not spend time polishing the temporary debug presentation.
+4. Inspect the current GPUI Kit Base Dock source/examples before changing panel, restore or drag APIs.
 
-**Exit condition:** Brucebox launches as a minimal native GPUI application using GPUI Kit.
+**Exit condition:** The native GUI/DockArea bootstrap remains reliable and the dependency baseline is understood.
 
-Do not proceed until this works reliably.
+### Stage 1 — Panel catalog and workspace decoupling
 
-### Stage 2 — Establish the baseline workspace
+1. Introduce stable namespaced plugin IDs, panel type IDs and unique panel instance IDs.
+2. Define panel contribution metadata: owner, title/icon, multiplicity, factory and state create/restore hooks.
+3. Implement the Brucebox panel catalog: register, lookup, enumerate and instantiate; define duplicate-ID and unavailable-plugin behavior.
+4. Bridge the catalog to GPUI Kit Base's internal panel factory/restoration mechanism. Keep these registries conceptually distinct.
+5. Refactor workspace construction to resolve panel IDs through the catalog. Workspace/DockArea code must not import concrete plugin implementations.
+6. Replace temporary Welcome/Scratch/Activity panels as real first-party contributions become available.
 
-1. Create the workspace crate.
-2. Integrate GPUI Kit's DockArea.
-3. Keep the current temporary panels/rendering only as short-lived bootstrap scaffolding where needed.
-4. Verify panel dragging, tab creation, tab reordering and split resizing.
-5. Test closing and reopening panels.
-6. Save and restore DockArea state.
+**Exit condition:** A contribution can register a panel without editing workspace construction; IDs and instances are distinct; docking still works.
 
-Do not create a separate test-plugin project. Replace the temporary bootstrap panels with real Agent Chat and Git contributions as soon as the plugin path exists.
+### Stage 2 — Workspace persistence and presets
 
-**Exit condition:** A functioning dockable workspace with a persistent nested layout and a replaceable presentation layer.
+1. Inspect the pinned DockArea state, change notification and restoration APIs.
+2. Define a versioned WorkspaceDocument containing workspace identity/schema, DockArea state, panel type/instance/plugin IDs, and opaque panel state.
+3. Save/restore using GPUI Kit Base's supported state APIs; do not duplicate the Dock tree.
+4. Apply the default preset only on first launch or explicit reset. Restore the user's saved state on later launches.
+5. Coalesce/debounce persistence; avoid writing on every pointer movement.
+6. Preserve unresolved panel records/state when a plugin is missing, disabled or incompatible.
 
-### Stage 3 — Establish Brucebox's workspace abstraction
+**Exit condition:** Layout and panel state survive restart; unavailable plugins do not erase user arrangements; reset-to-default is explicit.
 
-1. Introduce stable panel type identifiers.
-2. Introduce unique panel instance identifiers.
-3. Create a central panel catalog.
-4. Allow registered plugins to contribute panel factories without choosing panel locations.
-5. Implement a command palette or lightweight panel launcher.
-6. Allow opening multiple instances of the same panel type.
-7. Introduce a versioned WorkspaceDocument.
-8. Wrap GPUI Kit's DockArea state in that document.
-9. Add the default workspace as a replaceable preset.
-10. Preserve missing-plugin panel state during restoration.
+### Stage 3 — Floating surfaces
 
-**Exit condition:** The workspace can be composed dynamically from registered panels without hardcoded UI slots.
+1. Add a workspace-level floating group model with bounds, z-order/focus and an inner DockArea where useful.
+2. Implement create, move, resize, detach, redock, basic drop previews and cross-surface transfer.
+3. Preserve panel identity/state and avoid unnecessary destruction/recreation.
+4. Persist floating geometry and group membership in WorkspaceDocument.
+5. Start with in-window floating groups; defer advanced snapping, multi-monitor and animation polish.
 
-### Stage 4 — Establish floating surfaces
+**Exit condition:** Panels move between docked and floating groups, remain usable, and survive restart.
 
-1. Introduce the floating-surface model.
-2. Render floating surfaces within the existing GPUI application window.
-3. Support independent position and dimensions.
-4. Implement drag-to-move.
-5. Implement edge and corner resizing.
-6. Support z-order and focus.
-7. Allow a docked panel to be detached into a floating surface.
-8. Allow a floating panel to be returned to the main DockArea.
-9. Implement basic drop previews and docking targets.
-10. Extend workspace persistence to include floating surfaces.
+### Stage 4 — Cordis composition runtime
 
-Use GPUI Kit's existing DockArea for nested tabs and splits inside floating groups where practical. Do not create another GPUI application.
+1. Add/pin cordis-rs 0.11.1 only after verifying its actual API and compatibility with the pinned toolchain.
+2. Create a thin Brucebox runtime adapter around one host-owned Cordis runtime.
+3. Define plugin lifecycle, dependency ordering/availability, typed services/events, async work and cleanup conventions.
+4. Connect plugin registration/unregistration to the panel catalog without coupling workspace internals to Cordis types.
+5. Bridge async plugin operations/events back to the GPUI application thread safely.
+6. Use Cordis for composition/lifecycle; do not implement a second event bus, DI container or service locator.
 
-**Exit condition:** A panel can be docked, detached, moved, resized and docked again without losing its identity or state.
+**Exit condition:** The runtime starts/stops correctly; contributions can provide/consume typed services and events; dependencies and resource cleanup are explicit; Cordis remains UI-agnostic.
 
-### Stage 5 — Prove the independent native plugin boundary and loader
+### Stage 5 — SDK and native ABI proof
 
-This stage replaces the old source-plugin bundling/registry-generation milestone.
+1. Create a narrow versioned brucebox-plugin-api boundary and a developer-facing brucebox-sdk.
+2. Expose the supported GPUI/GPUI Kit Base APIs, panel/command contributions, host services and Cordis integration. Do not require a shared visual component library.
+3. Pin and document the supported Rust toolchain, target, GPUI Kit/GPUI, Cordis, SDK and plugin API compatibility set.
+4. Isolate unsafe ABI/symbol work. Define entrypoint, host context, version negotiation, registration and teardown.
+5. Build Agent Chat as a standalone plugin project, not a host Cargo workspace member.
+6. Prove independent build + runtime load + real GPUI panel rendering/interaction + registration into the host-owned Cordis runtime + safe shutdown/library lifetime.
+7. Resolve any ABI/GPUI constraint before expanding the API. Matching crate versions alone are not a stable Rust ABI guarantee.
 
-1. Define a minimal versioned plugin manifest and folder format.
-2. Decide the plugin binary output format for Linux, Windows and macOS.
-3. Create the isolated plugin API/loader boundary.
-4. Validate the Rust/GPUI/Cordis compatibility strategy before expanding the API.
-5. Implement plugin-root discovery and manifest validation.
-6. Implement native library loading and versioned entry-point resolution.
-7. Define host context and plugin registration/teardown.
-8. Build one minimal but real Agent Chat plugin independently of the host.
-9. Package it as a plugin folder and load it from the host at runtime.
-10. Verify it registers and renders an actual GPUI panel.
-11. Verify it can be disabled/replaced on disk and takes effect after restarting Brucebox.
-12. Verify load failures and incompatible versions are reported without crashing the host.
+**Exit condition:** An independently compiled Agent Chat plugin can safely contribute native GPUI UI and runtime functionality without rebuilding the host; incompatible builds are rejected clearly.
 
-Do not make the host compile the plugin. Do not create a throwaway plugin to prove loading; use the beginning of Agent Chat as the real first plugin.
+### Stage 6 — Plugin folder manager and developer workflow
 
-**Exit condition:** A separately compiled first-party plugin folder can be copied into the plugin root and loaded by Brucebox without changing or rebuilding the host executable, and it can contribute a native GPUI panel safely.
+1. Finalize the versioned manifest and self-contained package format: metadata, API/SDK compatibility, platform binary path, optional dependencies and assets.
+2. Implement configured development and per-user plugin roots; scan package folders, not arbitrary Rust source trees.
+3. Validate manifests, paths, unique IDs, platform/architecture, compatibility and dependencies before loading.
+4. Load enabled plugins through the isolated native loader; retain library handles while any plugin-owned panel, factory, callback, service, task or destructor may execute.
+5. Isolate load failures and report actionable diagnostics without crashing the host.
+6. Implement optional CLI/xtask commands to build, validate, package and install one standalone plugin project at a time.
+7. Keep plugin source projects outside the host Cargo workspace. Normal application startup must not invoke Cargo or generate a static plugin registry.
+8. Plugin changes take effect after restart; live machine-code hot replacement/unloading is not required.
 
-### Stage 6 — Connect Cordis across independently loaded plugins
+**Exit condition:** Copying a compatible packaged plugin folder into a configured root makes it available after restart, with no host source change or rebuild.
 
-1. Initialize one host-owned Cordis runtime.
-2. Register contributions from loaded plugin entry points into that runtime.
-3. Retain plugin lifecycle handles and native library handles.
-4. Implement orderly startup and shutdown.
-5. Verify plugin-owned tasks, subscriptions, panels and callbacks are disposed before library handles are released.
-6. Establish the contract/versioning approach for plugin-defined services and events.
-7. Implement Git's repository/context service and typed change events.
-8. Have Agent Chat consume Git's service/event contract.
-9. Verify the Agent Chat UI can use repository context without importing Git's implementation.
-10. Verify the integration still works when both panels are moved, split or tabified.
+### Stage 7 — Real first-party plugin vertical slice
 
-**Exit condition:** Independently loaded plugins can publish and consume typed functionality through the same host-owned composition runtime.
+1. Build/package Agent Chat and Git independently using the same SDK, manifest and loader path available to third parties.
+2. Implement the initial real Agent Chat conversation panel: message history, composer and a minimal session/send/receive seam.
+3. Implement the initial real Git contribution: repository selection, branch/status, changed files and basic diff inspection.
+4. Define a plugin-owned typed Git repository/context contract and change events.
+5. Have Agent Chat consume Git context/events through the shared Cordis runtime, without importing Git implementation code.
+6. Verify both plugins can register appropriate panel types and multiple instances where supported.
+7. Verify UI remains functional and plugin communication remains independent of dock/floating placement.
+8. Exercise load failure, missing-plugin restoration and shutdown behavior.
 
-### Stage 7 — Complete the first real plugin vertical slice
+**Exit condition:** Two separately compiled real plugins render native GPUI panels and interoperate through Cordis.
 
-1. Build and package Agent Chat and Git independently.
-2. Load both through the same production plugin loader.
-3. Implement the initial real Agent Chat conversation UI.
-4. Implement initial real Git repository status and diff UI.
-5. Verify both plugins can register multiple panel types where appropriate.
-6. Verify each can open multiple instances if its panel type allows it.
-7. Verify the Git-to-Agent-Chat context integration.
-8. Exercise plugin errors and missing-plugin behavior.
-9. Confirm no application source edits or host rebuild are needed to add/update either plugin folder.
+### Stage 8 — Framework template and default workspace
 
-**Exit condition:** The first useful Brucebox workspace is composed entirely from real, independently built plugins.
+1. Define a replaceable first-run preset using registered Agent Chat/Git panel IDs.
+2. Add a minimal panel/plugin catalog or launcher for discovering/opening contributions; it is not a permanent dock slot.
+3. Construct the default workspace from plugin registrations, never hardcoded panel implementations.
+4. Verify arbitrary rearrangement, split/tab operations, floating groups, persistence, reset, restart and missing-plugin recovery.
+5. Verify third-party plugins use the same packaged folder, compatibility, SDK, registration and runtime path as first-party plugins.
 
-### Stage 8 — Default workspace, persistence and integration
+**Exit condition:** Brucebox is a connected native framework template ready for ongoing workspace and plugin development.
 
-1. Populate the default workspace with Agent Chat and Git panels.
-2. Allow users to open additional panel instances.
-3. Split and tabify panels.
-4. Float and move panels.
-5. Save the workspace.
-6. Restart Brucebox.
-7. Restore the workspace and plugin panel state.
-8. Disable or remove one plugin and verify missing-panel state is handled without destroying the saved workspace.
-9. Reinstall/enable the plugin and verify its panel can be restored.
-10. Verify plugin communication after restoration.
+### Working rules
 
-**Exit condition:** The complete foundation works as one composable native application with independently loaded first-party plugins.
+- Inspect actual pinned dependency source/examples before using APIs; do not guess from other releases.
+- Make focused architectural decisions/ADRs only when they have long-term consequences.
+- Prefer complete vertical slices over throwaway prototypes. Agent Chat and Git are real product code, not test fixtures.
+- Unit/integration tests for registry, persistence, manifest validation, ABI compatibility and lifecycle are encouraged.
+- Keep the repository compiling; run formatting, check/build, tests and Clippy as appropriate.
+- Do not bypass an unresolved ABI, GPUI-thread, library-lifetime or restoration requirement just to progress.
+- Avoid speculative abstractions and unrelated refactors. Update this specification/plan when a material architectural decision changes.
 
 ---
 
