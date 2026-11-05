@@ -111,9 +111,9 @@ GPUI Kit provides:
 - Docking and tab infrastructure.
 - Layout behavior and persistence.
 
-Use the styled Dock implementation exposed through GPUI Kit for the initial docked workspace.
+Use GPUI Kit Base's renderer-independent DockArea as the initial docked-workspace engine. Use its structural docking, panel, tab, split, drag/drop, and state APIs, with a Brucebox-owned renderer/presentation layer.
 
-Plugins are not required to use its styled component library. They can use GPUI primitives directly and implement their own component systems.
+Do not require the styled GPUI Component layer. Plugins may use GPUI Kit Base, GPUI primitives, or their own GPUI component systems; no shared visual system is mandatory.
 
 ### D. Workspace engine — Brucebox
 
@@ -199,7 +199,7 @@ A plugin can contribute multiple panel types or no UI panels at all.
 
 ### 4.3 GPUI Kit as the baseline docking engine
 
-Use GPUI Kit's gpui-component::dock / gpui_kit::component::dock implementation for the initial docked workspace.
+Use GPUI Kit Base's gpui_kit::base::dock implementation for the initial docked workspace. Do not make gpui-component or its styled Dock presentation a requirement.
 
 It already provides:
 
