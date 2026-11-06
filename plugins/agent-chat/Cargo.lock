@@ -608,11 +608,20 @@ dependencies = [
 name = "brucebox-agent-chat"
 version = "0.1.0"
 dependencies = [
+ "brucebox-git-contract",
  "brucebox-sdk",
  "cordis-rs",
  "gpui-kit",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "brucebox-git-contract"
+version = "0.1.0"
+dependencies = [
+ "brucebox-sdk",
+ "serde",
 ]
 
 [[package]]
@@ -630,6 +639,8 @@ dependencies = [
  "brucebox-plugin-api",
  "cordis-rs",
  "gpui-kit",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

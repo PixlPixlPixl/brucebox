@@ -6,6 +6,7 @@
 //! copying a packaged folder into a plugin root and restarting.
 
 mod chat;
+mod git;
 mod session;
 
 use brucebox_sdk::prelude::*;

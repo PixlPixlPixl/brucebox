@@ -65,7 +65,11 @@ def main(display_name: str, window_hex: str, chord: str) -> int:
     for name in names:
         keysym = x11.XStringToKeysym(name.encode())
         if not keysym:
-            print(f"unknown keysym `{name}`", file=sys.stderr)
+            # X11 keysym names are case sensitive (`F2`, `Tab`); chords are given
+            # lowercase, so try the conventional capitalisation too.
+            keysym = x11.XStringToKeysym(name.upper().encode())
+        if not keysym:
+            print(f"unknown keysym `{name}` (and `{name.upper()}`)", file=sys.stderr)
             return 2
         keycodes.append(x11.XKeysymToKeycode(display, keysym))
         if keycodes[-1] == 0:

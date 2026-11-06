@@ -18,6 +18,7 @@ crate-type = ["cdylib"]
 # in this crate.
 [dependencies]
 brucebox-sdk = { path = "../../crates/brucebox-sdk" }
+brucebox-git-contract = { path = "../git-contract" }
 gpui-kit = { version = "=0.9.0", default-features = false }
 cordis-rs = { version = "=0.11.1" }
 serde = { version = "1", features = ["derive"] }

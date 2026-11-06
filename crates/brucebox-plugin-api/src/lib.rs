@@ -38,6 +38,7 @@
 //! copied out and used after its library is unloaded — see
 //! `brucebox-plugin-loader`.
 
+use std::ffi::c_void;
 use std::fmt;
 
 use cordis::PreparedPlugin;
@@ -49,13 +50,20 @@ use gpui_kit::{App, Window};
 /// A plugin declares the version it was built against; the host refuses any
 /// other version rather than calling into a library whose layout it does not
 /// share.
-pub const API_VERSION: u32 = 1;
+pub const API_VERSION: u32 = 2;
 
 /// The symbol a plugin library must export, including its terminating NUL.
-pub const ENTRY_SYMBOL: &[u8] = b"brucebox_plugin_entry_v1\0";
+pub const ENTRY_SYMBOL: &[u8] = b"brucebox_plugin_entry_v2\0";
 
 /// The symbol name as a string, for diagnostics.
-pub const ENTRY_SYMBOL_NAME: &str = "brucebox_plugin_entry_v1";
+pub const ENTRY_SYMBOL_NAME: &str = "brucebox_plugin_entry_v2";
+
+/// The largest contract payload a plugin may publish, in bytes.
+///
+/// Contracts carry workspace-scale data (a repository snapshot, a diff header),
+/// not file bodies; the limit turns a runaway publisher into a refused call
+/// instead of a slow copy through the bus.
+pub const CONTRACT_PAYLOAD_LIMIT: usize = 1024 * 1024;
 
 /// How many live instances one panel type supports.
 #[repr(C)]
@@ -254,8 +262,216 @@ impl fmt::Debug for PluginRegistration {
     }
 }
 
+/// A borrowed byte range crossing the plugin boundary.
+///
+/// Both sides are Rust today, but a `&[u8]` is two words whose layout is not part
+/// of any ABI, so it crosses as this explicit pair. The bytes are only valid for
+/// the duration of the call that carries them.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Bytes {
+    /// First byte, or null when `len` is zero.
+    pub ptr: *const u8,
+    /// Number of bytes.
+    pub len: usize,
+}
+
+impl Bytes {
+    /// The empty range.
+    pub fn empty() -> Self {
+        Self {
+            ptr: std::ptr::null(),
+            len: 0,
+        }
+    }
+
+    /// Borrow a slice for one call.
+    pub fn of(bytes: &[u8]) -> Self {
+        Self {
+            ptr: bytes.as_ptr(),
+            len: bytes.len(),
+        }
+    }
+
+    /// The bytes this range points at.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must point at `len` readable bytes that outlive the returned slice.
+    pub unsafe fn as_slice(&self) -> &[u8] {
+        if self.len == 0 || self.ptr.is_null() {
+            &[]
+        } else {
+            // SAFETY: the caller guarantees the range is readable and alive.
+            unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+        }
+    }
+}
+
+impl fmt::Debug for Bytes {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // SAFETY: debug output is only ever produced by the side that owns the
+        // bytes, which is also the side that made the range.
+        let bytes = unsafe { self.as_slice() };
+        write!(formatter, "Bytes({} bytes)", bytes.len())
+    }
+}
+
+/// What a contract bus call did.
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ContractStatus {
+    /// The call succeeded.
+    Ok = 0,
+    /// The topic or payload exceeded [`CONTRACT_PAYLOAD_LIMIT`].
+    TooLarge = 1,
+    /// The topic is empty or not a valid contract topic.
+    BadTopic = 2,
+    /// The host is shutting down and refused the call.
+    Refused = 3,
+}
+
+/// Called on the thread that published, with the topic and its new value.
+///
+/// The bytes are valid only for the duration of the call: a subscriber that needs
+/// them later copies them.
+pub type ContractNotify = extern "C" fn(user: *mut c_void, topic: Bytes, payload: Bytes);
+
+/// The host's cross-plugin data bus.
+///
+/// Plugins cooperate by publishing typed contracts on named topics and reading or
+/// subscribing to them; they never hold each other's types. That matters because
+/// two separately compiled libraries do not share `TypeId`s (see ADR 0005 and
+/// ADR 0007), so a service value published by one plugin cannot be downcast by
+/// another. The contract *types* still live in one shared crate, which turns the
+/// bytes back into the same Rust value on both sides.
+///
+/// Every function takes the `user` pointer the host installed for the calling
+/// plugin: that is how the host attributes a publication, and it is why plugins
+/// never pass an id.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ContractBus {
+    /// Opaque host state, set when the context is built.
+    pub user: *mut c_void,
+    /// Publish (or replace) this plugin's value under `topic`.
+    pub publish: extern "C" fn(user: *mut c_void, topic: Bytes, payload: Bytes) -> ContractStatus,
+    /// Copy the current value of `topic` into `out`.
+    ///
+    /// Call with `out` null to ask for the length; a positive return is the
+    /// length copied (or needed), and `-1` means the topic has no value.
+    pub read:
+        extern "C" fn(user: *mut c_void, topic: Bytes, out: *mut u8, capacity: usize) -> isize,
+    /// Subscribe to changes of `topic`. Returns an id, or `0` when refused.
+    pub subscribe: extern "C" fn(
+        user: *mut c_void,
+        topic: Bytes,
+        notify: ContractNotify,
+        sink: *mut c_void,
+    ) -> u64,
+    /// Drop a subscription created by `subscribe`.
+    pub unsubscribe: extern "C" fn(user: *mut c_void, id: u64),
+}
+
+impl fmt::Debug for ContractBus {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ContractBus")
+            .finish_non_exhaustive()
+    }
+}
+
+/// What the host hands a plugin when it is loaded.
+///
+/// This is the plugin's whole view of the host: a version, and the bus. Panels
+/// and the composition runtime are described by the registration the entry point
+/// returns; anything else a plugin needs from the host has to arrive through the
+/// bus, deliberately.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct HostContext {
+    /// The [`API_VERSION`] the host implements. A plugin refuses a context whose
+    /// version it does not understand rather than calling through it.
+    pub api_version: u32,
+    /// The bus the plugin may use for its lifetime.
+    pub bus: ContractBus,
+}
+
+impl HostContext {
+    /// A context whose bus refuses every call.
+    ///
+    /// Used by tooling and tests that need to load a library without a running
+    /// host: a plugin loaded with it works exactly as long as it does not touch
+    /// the bus, and every bus call reports [`ContractStatus::Refused`] instead of
+    /// dereferencing anything.
+    pub fn inert() -> Self {
+        Self {
+            api_version: API_VERSION,
+            bus: ContractBus {
+                user: std::ptr::null_mut(),
+                publish: inert_publish,
+                read: inert_read,
+                subscribe: inert_subscribe,
+                unsubscribe: inert_unsubscribe,
+            },
+        }
+    }
+}
+
+extern "C" fn inert_publish(_user: *mut c_void, _topic: Bytes, _payload: Bytes) -> ContractStatus {
+    ContractStatus::Refused
+}
+
+extern "C" fn inert_read(
+    _user: *mut c_void,
+    _topic: Bytes,
+    _out: *mut u8,
+    _capacity: usize,
+) -> isize {
+    -1
+}
+
+extern "C" fn inert_subscribe(
+    _user: *mut c_void,
+    _topic: Bytes,
+    _notify: ContractNotify,
+    _sink: *mut c_void,
+) -> u64 {
+    0
+}
+
+extern "C" fn inert_unsubscribe(_user: *mut c_void, _id: u64) {}
+
+impl fmt::Debug for HostContext {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HostContext")
+            .field("api_version", &self.api_version)
+            .finish_non_exhaustive()
+    }
+}
+
+// SAFETY: the host builds every `HostContext` and owns the state `user` points
+// at. The bus functions it installs are thread-safe (the registry is behind a
+// lock and the callbacks take no lock while they run), so a context may be shared
+// by any thread a plugin runs on — which is exactly what a plugin's Cordis task
+// does.
+unsafe impl Send for HostContext {}
+unsafe impl Sync for HostContext {}
+
 /// The exported entry point every plugin library defines.
-pub type PluginEntry = extern "C" fn() -> *const PluginRegistration;
+///
+/// The host passes its context once, before the registration is used; a plugin
+/// that keeps anything from it must keep a copy, not a pointer to the caller's
+/// stack slot.
+///
+/// # Safety
+///
+/// The caller must pass a valid [`HostContext`] that outlives the call. The
+/// function is `unsafe` for that reason and not because of what it does: it copies
+/// the context and returns a `'static` registration.
+pub type PluginEntry =
+    unsafe extern "C" fn(context: *const HostContext) -> *const PluginRegistration;
 
 /// Why a plugin's registration was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]

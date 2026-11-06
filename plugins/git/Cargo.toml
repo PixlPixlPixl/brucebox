@@ -1,0 +1,27 @@
+[package]
+name = "brucebox-git"
+version = "0.1.0"
+edition = "2024"
+
+# The Git plugin. Its own workspace and lockfile, like every plugin project: it is
+# built as a `cdylib` against the public SDK and loaded by the host at runtime.
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+
+[dependencies.brucebox-sdk]
+path = "../../crates/brucebox-sdk"
+
+[dependencies.brucebox-git-contract]
+path = "../git-contract"
+
+[dependencies.serde]
+version = "1"
+features = ["derive"]
+
+[dependencies.serde_json]
+version = "1"

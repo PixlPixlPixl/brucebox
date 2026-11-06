@@ -24,7 +24,9 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use brucebox_plugin_api::{PluginEntry, PluginRegistration, RegistrationError, validate};
+use brucebox_plugin_api::{
+    HostContext, PluginEntry, PluginRegistration, RegistrationError, validate,
+};
 use brucebox_plugin_manifest::{Manifest, PluginPackage};
 use libloading::Library;
 
@@ -102,7 +104,7 @@ impl fmt::Debug for LoadedPlugin {
 /// Fails if the library cannot be opened, if it does not export the entry
 /// symbol, if the entry returns nothing, or if the registration it describes is
 /// not one this host can render (see [`RegistrationError`]).
-pub fn load(package: PluginPackage) -> Result<LoadedPlugin, LoadError> {
+pub fn load(package: PluginPackage, context: &HostContext) -> Result<LoadedPlugin, LoadError> {
     let library_path = package
         .library_path()
         .map_err(|error| LoadError::Package(error.to_string()))?;
@@ -124,12 +126,13 @@ pub fn load(package: PluginPackage) -> Result<LoadedPlugin, LoadError> {
         *symbol
     };
 
-    // SAFETY: the plugin API documents the entry contract — it returns either null
-    // or a pointer to a registration that outlives the plugin — and the pointer is
-    // only dereferenced once, into a shared reference that `validate` inspects
-    // before the host uses any of it.
+    // SAFETY: the plugin API documents the entry contract — it is called once,
+    // with a context the host owns for the rest of the process, and returns either
+    // null or a pointer to a registration that outlives the plugin — and the
+    // pointer is only dereferenced once, into a shared reference that `validate`
+    // inspects before the host uses any of it.
     let registration = unsafe {
-        let pointer = entry();
+        let pointer = entry(context);
         if pointer.is_null() {
             return Err(LoadError::NoRegistration { path: library_path });
         }
@@ -176,11 +179,14 @@ fn open(path: &Path) -> Result<Library, String> {
 ///
 /// A package that fails to load is reported and skipped; it never prevents the
 /// others from loading, and the host keeps running.
-pub fn load_all(packages: &[PluginPackage]) -> (Vec<LoadedPlugin>, Vec<LoadError>) {
+pub fn load_all(
+    packages: &[PluginPackage],
+    context: &HostContext,
+) -> (Vec<LoadedPlugin>, Vec<LoadError>) {
     let mut loaded = Vec::new();
     let mut failures = Vec::new();
     for package in packages {
-        match load(package.clone()) {
+        match load(package.clone(), context) {
             Ok(plugin) => loaded.push(plugin),
             Err(error) => failures.push(error),
         }
@@ -298,12 +304,13 @@ schema = 1
 id = "brucebox.test"
 name = "Test"
 version = "0.1.0"
-api_version = 1
+api_version = {api_version}
 sdk_version = "0.1"
 
 [library]
 {platform} = "{library}"
 "#,
+            api_version = brucebox_plugin_api::API_VERSION,
             platform = brucebox_plugin_manifest::platform_key(),
         )
     }
@@ -313,7 +320,7 @@ sdk_version = "0.1"
         let manifest = Manifest::parse(&manifest_raw("brucebox_absent.so")).unwrap();
         let package = PluginPackage::with_manifest("/definitely/not/here", manifest);
 
-        match load(package) {
+        match load(package, &HostContext::inert()) {
             Err(LoadError::Package(detail)) => assert!(detail.contains("missing")),
             other => panic!("expected a package error, got {other:?}"),
         }
@@ -323,7 +330,7 @@ sdk_version = "0.1"
     fn a_file_that_is_not_a_library_is_reported_as_an_open_failure() {
         let package = package_with(&manifest_raw("broken.so"), Some(b"not a library"));
 
-        match load(package) {
+        match load(package, &HostContext::inert()) {
             Err(LoadError::Open { path, .. }) => assert!(path.ends_with("broken.so")),
             other => panic!("expected an open failure, got {other:?}"),
         }
@@ -357,7 +364,7 @@ sdk_version = "0.1"
             Manifest::parse(&manifest_raw(name)).unwrap(),
         );
 
-        match load(package) {
+        match load(package, &HostContext::inert()) {
             Err(LoadError::MissingEntry { path, .. }) => assert!(path.ends_with(name)),
             other => panic!("expected a missing entry symbol, got {other:?}"),
         }
@@ -367,7 +374,7 @@ sdk_version = "0.1"
     fn load_all_keeps_going_after_a_failure() {
         let bad = package_with(&manifest_raw("broken.so"), Some(b"not a library"));
 
-        let (loaded, failures) = load_all(std::slice::from_ref(&bad));
+        let (loaded, failures) = load_all(std::slice::from_ref(&bad), &HostContext::inert());
 
         assert!(loaded.is_empty());
         assert_eq!(failures.len(), 1);

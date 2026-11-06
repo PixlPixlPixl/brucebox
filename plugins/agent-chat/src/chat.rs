@@ -7,8 +7,12 @@
 //! `brucebox_plugin_api::PluginPanelInput`). The host wraps this panel in its own
 //! element, reads the events there, and forwards them here.
 
+use std::time::Duration;
+
 use brucebox_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
+
+use crate::git::GitContext;
 
 /// The panel type id this build registers.
 ///
@@ -32,6 +36,8 @@ pub enum Author {
     You,
     /// The panel's local stand-in for an agent.
     Agent,
+    /// Context another plugin published, attached at the user's request.
+    Context,
 }
 
 /// The panel's own persisted state.
@@ -47,6 +53,10 @@ pub struct ChatPanel {
     draft: String,
     /// Diagnostic: the last keystroke the host forwarded.
     last_key: Option<String>,
+    /// What the Git plugin is currently publishing, if anything.
+    git: std::sync::Arc<GitContext>,
+    /// Keeps the panel repainting while that context changes.
+    _tick: Task<()>,
 }
 
 impl ChatPanel {
@@ -57,11 +67,25 @@ impl ChatPanel {
             .and_then(|text| serde_json::from_str::<Saved>(text).ok())
             .unwrap_or_default();
 
-        cx.new(|_| Self {
+        let git = GitContext::shared();
+        cx.new(|cx| Self {
             instance: open.instance,
             messages: saved.messages,
             draft: String::new(),
             last_key: None,
+            git,
+            // The Git snapshot arrives on the runtime thread; this only decides
+            // how quickly the panel notices it.
+            _tick: cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(600))
+                        .await;
+                    if this.update(cx, |_, cx| cx.notify()).is_err() {
+                        break;
+                    }
+                }
+            }),
         })
     }
 
@@ -81,6 +105,11 @@ impl ChatPanel {
                     return;
                 }
                 match key.key {
+                    "f2" => {
+                        if self.attach_git_context() {
+                            cx.notify();
+                        }
+                    }
                     "enter" => {
                         if self.send() {
                             cx.notify();
@@ -104,6 +133,21 @@ impl ChatPanel {
                 // on its own side. Nothing in this panel needs a pointer yet.
             }
         }
+    }
+
+    /// Attach what the Git plugin publishes to the conversation.
+    ///
+    /// Nothing about this reads the Git plugin's code: it asks the shared context,
+    /// which is filled from the contract bus.
+    fn attach_git_context(&mut self) -> bool {
+        let Some(attachment) = self.git.attachment() else {
+            return false;
+        };
+        self.messages.push(Message {
+            author: Author::Context,
+            text: attachment,
+        });
+        true
     }
 
     /// Append what the composer holds and clear it.
@@ -135,6 +179,25 @@ impl ChatPanel {
             author: Author::Agent,
             text: format!("You said: \"{first_line}\"."),
         })
+    }
+}
+
+impl ChatPanel {
+    /// The one-line Git status: what another plugin is publishing right now.
+    fn git_line(&self) -> Div {
+        match (self.git.summary(), self.git.is_connected()) {
+            (Some(summary), _) => div()
+                .flex()
+                .flex_row()
+                .gap(px(8.))
+                .child(div().text_color(rgb(0xe2c08d)).child("Git"))
+                .child(div().text_color(rgb(0x8b93a1)).child(summary))
+                .child(div().text_color(rgb(0x6f7684)).child("F2 to attach")),
+            (None, false) => div()
+                .text_color(rgb(0x6f7684))
+                .child("Git: no plugin publishing a repository"),
+            (None, true) => div().text_color(rgb(0x6f7684)).child("Git: connecting"),
+        }
     }
 }
 
@@ -175,6 +238,7 @@ impl Render for ChatPanel {
                 let (label, color) = match message.author {
                     Author::You => ("You", rgb(0x9ecbff)),
                     Author::Agent => ("Agent", rgb(0x7dd3a0)),
+                    Author::Context => ("Git context", rgb(0xe2c08d)),
                 };
                 div()
                     .flex()
@@ -208,17 +272,14 @@ impl Render for ChatPanel {
                     .flex()
                     .flex_row()
                     .justify_between()
-                    .child(
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Agent Chat"),
-                    )
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Agent Chat"))
                     .child(div().text_color(rgb(0x6f7684)).child(format!(
                         "instance {} · key {}",
                         self.instance,
                         self.last_key.clone().unwrap_or_else(|| "-".to_owned())
                     ))),
             )
+            .child(self.git_line())
             .child(
                 div()
                     .id("transcript")
@@ -252,11 +313,7 @@ impl Render for ChatPanel {
                             })
                             .child(footer),
                     )
-                    .child(
-                        div()
-                            .text_color(rgb(0x6f7684))
-                            .child("Enter to send"),
-                    ),
+                    .child(div().text_color(rgb(0x6f7684)).child("Enter to send")),
             )
     }
 }

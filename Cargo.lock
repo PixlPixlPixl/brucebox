@@ -663,6 +663,8 @@ dependencies = [
  "brucebox-plugin-api",
  "cordis-rs",
  "gpui-kit",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -33,6 +33,7 @@
 //! block, and both are before the first frame and after the last one.
 
 mod bridge;
+pub mod bus;
 mod composition;
 mod contract;
 mod error;

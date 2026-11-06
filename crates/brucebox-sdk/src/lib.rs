@@ -42,6 +42,47 @@ use std::sync::Arc;
 use brucebox_plugin_api as api;
 
 pub use brucebox_plugin_api as plugin_api;
+
+pub mod contracts;
+
+use std::sync::OnceLock;
+
+use brucebox_plugin_api::HostContext;
+
+/// The context the host handed the library when it loaded it.
+///
+/// Set once, by [`declare_plugin!`], before the registration is built. A plugin
+/// that was loaded without a context (tooling, a test) simply has no bus.
+static HOST: OnceLock<HostContext> = OnceLock::new();
+
+/// Keep the host context for the life of the process.
+///
+/// Called by [`declare_plugin!`]; a plugin never calls this itself. A context from
+/// another API version is ignored rather than half-used, and the plugin's bus calls
+/// then report that the host did not provide one.
+/// Keep the host context the entry point was called with.
+///
+/// # Safety
+///
+/// `context` must be null or point at a [`HostContext`] that is valid for the
+/// duration of the call. This is the one dereference the entry point performs; it
+/// lives here so the generated symbol itself stays a plain forwarding function.
+pub unsafe fn capture_host_from(context: *const HostContext) {
+    if context.is_null() {
+        return;
+    }
+    // SAFETY: the caller guarantees the pointer is valid for this call, and the
+    // context is copied out of it immediately.
+    let context = unsafe { *context };
+    capture_host(&context);
+}
+
+pub fn capture_host(context: &HostContext) {
+    if context.api_version != brucebox_plugin_api::API_VERSION {
+        return;
+    }
+    let _ = HOST.set(*context);
+}
 pub use cordis;
 pub use gpui_kit;
 
@@ -188,9 +229,16 @@ impl Plugin {
 macro_rules! declare_plugin {
     ($plugin:expr) => {
         /// The one symbol the host resolves in this library.
+        ///
+        /// The host passes its context once; the SDK keeps a copy for the bus and
+        /// then answers with the registration this library describes.
         #[unsafe(no_mangle)]
-        pub extern "C" fn brucebox_plugin_entry_v1(
+        pub unsafe extern "C" fn brucebox_plugin_entry_v2(
+            context: *const $crate::plugin_api::HostContext,
         ) -> *const $crate::plugin_api::PluginRegistration {
+            // SAFETY: the host passes a context that is valid for this call, and
+            // the SDK copies what it needs out of it.
+            unsafe { $crate::capture_host_from(context) };
             static REGISTRATION: ::std::sync::OnceLock<
                 &'static $crate::plugin_api::PluginRegistration,
             > = ::std::sync::OnceLock::new();
@@ -264,6 +312,7 @@ where
 /// resolve `::gpui_kit` paths in the crate that uses them; keep `gpui-kit` as a
 /// direct dependency of the plugin project, pinned to the same version.
 pub mod prelude {
+    pub use crate::contracts;
     pub use crate::{Plugin, declare_plugin, interactive_panel, panel_view};
     pub use brucebox_plugin_api::{
         KeyInput, PanelContribution, PanelMultiplicity, PanelOpen, PanelParts, PluginInput,

@@ -524,12 +524,13 @@ schema = 1
 id = "{id}"
 name = "{id}"
 version = "{version}"
-api_version = 1
+api_version = {api_version}
 sdk_version = "0.1"
 
 [library]
 {platform} = "bin/{platform}/lib{stem}.so"
 {requires}"#,
+                api_version = brucebox_plugin_manifest::API_VERSION,
                 platform = brucebox_plugin_manifest::platform_key(),
                 stem = id.replace(['.', '-'], "_"),
             ),

@@ -17,3 +17,10 @@ default-features = false
 
 [dependencies.cordis-rs]
 version = "=0.11.1"
+
+[dependencies.serde]
+version = "1"
+features = ["derive"]
+
+[dependencies.serde_json]
+version = "1"

@@ -1,0 +1,16 @@
+schema = 1
+
+[plugin]
+id = "brucebox.git"
+name = "Git"
+version = "0.1.0"
+description = "Repository status, changed files and diffs, published as a contract for other plugins."
+api_version = 2
+sdk_version = "0.1"
+
+[library]
+linux-x86_64 = "bin/linux-x86_64/libbrucebox_git.so"
+linux-aarch64 = "bin/linux-aarch64/libbrucebox_git.so"
+macos-aarch64 = "bin/macos-aarch64/libbrucebox_git.dylib"
+macos-x86_64 = "bin/macos-x86_64/libbrucebox_git.dylib"
+windows-x86_64 = "bin/windows-x86_64/brucebox_git.dll"

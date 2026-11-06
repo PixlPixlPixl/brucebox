@@ -32,6 +32,11 @@ Completed so far:
   that carries plugin contributions, typed events and lifecycle state to the
   interface as messages. Decisions in
   [`docs/adr/0004-cordis-composition-runtime.md`](docs/adr/0004-cordis-composition-runtime.md).
+- Step 7 — the cross-plugin contract: Agent Chat and Git are two separately
+  compiled plugins that cooperate through a versioned data contract on a bus the
+  host owns — measured, because a Cordis service value cannot cross a library
+  boundary. Decisions and the measurement are in
+  [`docs/adr/0007-cross-plugin-contracts.md`](docs/adr/0007-cross-plugin-contracts.md).
 - Step 6 — plugin folders and the developer workflow: a manifest schema with
   plugin dependencies, ordered development and user roots, an on/off config, a
   loader that turns each folder into a verdict with a reason, the Plugins panel
@@ -166,6 +171,31 @@ declare_plugin!(Plugin::new("com.example.hello", "Hello", "0.1.0")
 a composer, its own persisted state, and a session service published into the
 host's composition runtime.
 
+### Two plugins, one contract
+
+`plugins/git` publishes a repository snapshot and the selected file's diff on the
+host's contract bus; `plugins/agent-chat` subscribes and shows the live status,
+with `F2` attaching the repository — and the selected diff — to the conversation.
+Neither plugin links the other. Both depend on `plugins/git-contract`, which holds
+the types and the topic names and nothing executable.
+
+```rust
+// in the Git plugin
+brucebox_git_contract::publish_snapshot(&snapshot)?;
+
+// in Agent Chat
+if let Some(snapshot) = brucebox_git_contract::repository() { … }
+let _live = brucebox_git_contract::subscribe(|snapshot| { … })?;
+```
+
+Why a bus rather than a Cordis service: a service value crosses as `Arc<dyn Any>`
+and is handed back through a `TypeId` downcast, and two separately compiled
+plugins do not agree on `TypeId` — one extra feature on a transitive dependency is
+enough to change it (ADR 0007 has the numbers). Contract *types* are Rust types in
+a shared crate; what crosses is bytes on a named, versioned topic. The bus is a
+last-value store: one value per topic, identical re-publications are silent, and a
+consumer that starts late reads the current value.
+
 ### What a plugin must match
 
 The pinned toolchain, the pinned `gpui-kit` and `cordis-rs`, and the plugin API
@@ -216,7 +246,9 @@ crates/
 └── xtask/                    the developer workflow: list, validate, pack, install
 
 plugins/
-└── agent-chat/             a first-party plugin, built as its own project
+├── agent-chat/             a first-party plugin, built as its own project
+├── git/                    a second one, publishing a repository contract
+└── git-contract/           the types and topics both of them share
 
 src/
 ├── main.rs                 binary: GPUI bootstrap, then the host window
@@ -265,3 +297,5 @@ only through the catalog and a layout.
   plain data, because GPUI's own listeners cannot fire across the boundary.
 - Tooling and host read one parser: a package cannot be built that the host reads
   differently, and a switch in the panel and `cargo xtask` write the same file.
+- Plugins cooperate through contracts, not through each other's code: a contract
+  is a shared type crate plus a versioned topic on the host bus.

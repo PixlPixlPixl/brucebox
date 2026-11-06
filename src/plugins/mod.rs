@@ -43,6 +43,7 @@ use gpui_kit::base::dock::PanelView;
 use gpui_kit::{App, Window};
 
 use crate::runtime::PluginRuntime;
+use crate::runtime::bus::PluginBusLink;
 use crate::workspace::catalog::{
     self, PanelCreateError, PanelCreateRequest, PanelFactories, PanelFactory, PanelMultiplicity,
     PanelTypeId, PluginId,
@@ -61,6 +62,10 @@ pub use brucebox_plugin_install::{PackageReport, PackageState, roots};
 pub struct LoadedPackage {
     plugin: LoadedPlugin,
     declaration: PluginDeclaration,
+    /// The plugin's link to the contract bus. Kept alive for the process: the
+    /// context the library was loaded with points at it, so this field is what
+    /// makes every later bus call valid.
+    _bus: std::sync::Arc<PluginBusLink>,
 }
 
 impl LoadedPackage {
@@ -103,11 +108,14 @@ impl PluginSet {
 
         for package in packages {
             let folder = package.root().to_path_buf();
-            match load(package) {
+            let bus = PluginBusLink::new(package.plugin_id());
+            let context = bus.host_context();
+            match load(package, &context) {
                 Ok(plugin) => match declaration_for(&plugin) {
                     Ok(declaration) => loaded.push(LoadedPackage {
                         plugin,
                         declaration,
+                        _bus: bus,
                     }),
                     Err((panel_type, error)) => refuse(
                         &mut reports,
@@ -380,6 +388,10 @@ mod tests {
     }
 
     /// Write a package whose declared library does not exist.
+    ///
+    /// The version is a parameter so a test can ask for a *future* one; the
+    /// default is this build's, which is what a package that should merely fail
+    /// to load needs.
     fn write_broken(root: &Path, folder: &str, id: &str, api_version: u32) {
         let folder = root.join(folder);
         std::fs::create_dir_all(&folder).unwrap();
@@ -427,7 +439,12 @@ sdk_version = "0.1"
     #[test]
     fn a_package_whose_library_is_missing_is_reported_and_does_not_stop_the_scan() {
         let root = temp_root("missing-library");
-        write_broken(&root, "broken-plugin", "com.example.broken", 1);
+        write_broken(
+            &root,
+            "broken-plugin",
+            "com.example.broken",
+            brucebox_plugin_api::API_VERSION,
+        );
 
         let set = activate(&root);
 
@@ -457,8 +474,18 @@ sdk_version = "0.1"
     #[test]
     fn two_folders_declaring_one_id_are_refused_rather_than_both_loaded() {
         let root = temp_root("duplicate-id");
-        write_broken(&root, "copy-a", "com.example.twice", 1);
-        write_broken(&root, "copy-b", "com.example.twice", 1);
+        write_broken(
+            &root,
+            "copy-a",
+            "com.example.twice",
+            brucebox_plugin_api::API_VERSION,
+        );
+        write_broken(
+            &root,
+            "copy-b",
+            "com.example.twice",
+            brucebox_plugin_api::API_VERSION,
+        );
 
         let set = activate(&root);
 

@@ -622,14 +622,16 @@ impl DiscoveryProblem {
 mod tests {
     use super::*;
 
-    const GOOD: &str = r#"
+    fn good() -> String {
+        format!(
+            r#"
 schema = 1
 
 [plugin]
 id = "brucebox.agent-chat"
 name = "Agent Chat"
 version = "0.1.0"
-api_version = 1
+api_version = {api_version}
 sdk_version = "0.1"
 
 [library]
@@ -637,11 +639,14 @@ linux-x86_64 = "bin/linux-x86_64/libbrucebox_agent_chat.so"
 
 [dependencies]
 requires = ["brucebox.git", "brucebox.workspace@0.1"]
-"#;
+"#,
+            api_version = API_VERSION,
+        )
+    }
 
     #[test]
     fn a_manifest_round_trips_into_a_package_description() {
-        let manifest = Manifest::parse(GOOD).expect("the manifest parses");
+        let manifest = Manifest::parse(&good()).expect("the manifest parses");
 
         assert_eq!(manifest.plugin_id(), "brucebox.agent-chat");
         assert_eq!(manifest.name(), "Agent Chat");
@@ -655,7 +660,7 @@ requires = ["brucebox.git", "brucebox.workspace@0.1"]
 
     #[test]
     fn dependencies_are_parsed_with_and_without_a_version() {
-        let manifest = Manifest::parse(GOOD).unwrap();
+        let manifest = Manifest::parse(&good()).unwrap();
         let dependencies = manifest.dependencies();
 
         assert_eq!(dependencies.len(), 2);
@@ -681,7 +686,7 @@ requires = ["brucebox.git", "brucebox.workspace@0.1"]
 
     #[test]
     fn another_api_version_is_refused_with_the_versions_named() {
-        let manifest = Manifest::parse(&GOOD.replace("api_version = 1", "api_version = 7"));
+        let manifest = Manifest::parse(&good().replace("api_version = 1", "api_version = 7"));
 
         match manifest {
             Err(ManifestError::ApiVersion {
@@ -698,20 +703,20 @@ requires = ["brucebox.git", "brucebox.workspace@0.1"]
     #[test]
     fn another_schema_version_is_refused() {
         assert!(matches!(
-            Manifest::parse(&GOOD.replace("schema = 1", "schema = 2")),
+            Manifest::parse(&good().replace("schema = 1", "schema = 2")),
             Err(ManifestError::Schema { found: 2, .. })
         ));
     }
 
     #[test]
     fn a_package_cannot_require_itself_or_the_same_plugin_twice() {
-        let itself = Manifest::parse(&GOOD.replace(
+        let itself = Manifest::parse(&good().replace(
             "requires = [\"brucebox.git\", \"brucebox.workspace@0.1\"]",
             "requires = [\"brucebox.agent-chat\"]",
         ));
         assert!(matches!(itself, Err(ManifestError::SelfDependency(_))));
 
-        let twice = Manifest::parse(&GOOD.replace(
+        let twice = Manifest::parse(&good().replace(
             "requires = [\"brucebox.git\", \"brucebox.workspace@0.1\"]",
             "requires = [\"brucebox.git\", \"brucebox.git\"]",
         ));
@@ -720,8 +725,9 @@ requires = ["brucebox.git", "brucebox.workspace@0.1"]
 
     #[test]
     fn a_missing_platform_library_is_reported_with_what_the_package_does_provide() {
-        let manifest = Manifest::parse(GOOD).unwrap();
-        let other = Manifest::parse(&GOOD.replace("linux-x86_64", "some-other-platform")).unwrap();
+        let manifest = Manifest::parse(&good()).unwrap();
+        let other =
+            Manifest::parse(&good().replace("linux-x86_64", "some-other-platform")).unwrap();
 
         if platform_key() != "some-other-platform" {
             match other.resolve_library(Path::new("/nowhere")) {
@@ -741,7 +747,7 @@ requires = ["brucebox.git", "brucebox.workspace@0.1"]
 
     #[test]
     fn a_library_path_may_not_climb_out_of_the_plugin_folder() {
-        let manifest = Manifest::parse(&GOOD.replace(
+        let manifest = Manifest::parse(&good().replace(
             "bin/linux-x86_64/libbrucebox_agent_chat.so",
             "../../libbrucebox_agent_chat.so",
         ))
@@ -756,7 +762,7 @@ requires = ["brucebox.git", "brucebox.workspace@0.1"]
     #[test]
     fn a_plugin_id_must_be_namespaced() {
         assert!(matches!(
-            Manifest::parse(&GOOD.replace("brucebox.agent-chat", "agent-chat")),
+            Manifest::parse(&good().replace("brucebox.agent-chat", "agent-chat")),
             Err(ManifestError::IdNotNamespaced(_))
         ));
     }

@@ -1,0 +1,28 @@
+[package]
+name = "brucebox-git-contract"
+version = "0.1.0"
+edition = "2024"
+
+# The contract two plugins share. It is a *data* crate: types, topic names and
+# typed publish/read/subscribe helpers over the host bus. Neither plugin depends
+# on the other's implementation, and this crate depends on neither plugin.
+#
+# Its own workspace, like the plugins that consume it: it is built as part of a
+# plugin project, never into the host.
+
+[workspace]
+
+[lib]
+name = "brucebox_git_contract"
+
+[dependencies]
+
+[dependencies.brucebox-sdk]
+path = "../../crates/brucebox-sdk"
+
+[dependencies.serde]
+version = "1"
+features = ["derive"]
+
+[dev-dependencies.serde_json]
+version = "1"

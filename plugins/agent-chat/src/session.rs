@@ -14,9 +14,9 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use brucebox_sdk::cordis::event::observer_sync;
-use brucebox_sdk::cordis::{
-    Context, Event, InjectSpec, Plugin, PreparedPlugin, Routing, Service,
-};
+
+use crate::git::GitContext;
+use brucebox_sdk::cordis::{Context, Event, InjectSpec, Plugin, PreparedPlugin, Routing, Service};
 
 /// The service name this plugin publishes.
 pub const SESSION_SERVICE: &str = "brucebox.agent-chat.session";
@@ -33,7 +33,10 @@ pub struct Session {
 impl Session {
     /// Append one line and return the transcript length.
     pub fn push(&self, text: impl Into<String>) -> usize {
-        let mut messages = self.messages.lock().expect("the transcript is not poisoned");
+        let mut messages = self
+            .messages
+            .lock()
+            .expect("the transcript is not poisoned");
         messages.push(text.into());
         messages.len()
     }
@@ -70,7 +73,11 @@ pub struct SessionError(String);
 
 impl fmt::Display for SessionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "agent chat could not join the runtime: {}", self.0)
+        write!(
+            formatter,
+            "agent chat could not join the runtime: {}",
+            self.0
+        )
     }
 }
 
@@ -127,6 +134,15 @@ impl Plugin for AgentChatRuntime {
 
         ctx.emit::<MessageAppended>(Routing::Unscoped, "session opened".to_owned())
             .await
+            .map_err(|error| SessionError(error.to_string()))?;
+
+        // Follow the Git contract, if anything is publishing it. This is optional by
+        // design: the conversation works with no Git plugin installed, and simply
+        // gains a repository line and an attach action when one is present.
+        let git = GitContext::shared();
+        git.connect();
+        let connected = git.clone();
+        ctx.effect_sync(move || connected.disconnect())
             .map_err(|error| SessionError(error.to_string()))?;
 
         Ok(())
