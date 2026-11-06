@@ -1,25 +1,34 @@
 //! The versioned workspace document: the one persisted shape of a workspace.
 //!
-//! The document holds workspace identity and GPUI Base Dock's own state. It
-//! deliberately does **not** mirror the dock tree: the tree has one owner, and
-//! duplicating it would mean two things to keep in step and a migration problem
-//! in two places. Panel identity and per-panel state ride inside the dock's leaf
-//! states (see [`crate::workspace::panels::host`]).
+//! The document holds workspace identity, GPUI Base Dock's state for the docked
+//! workspace, and one such state per floating surface. It deliberately does
+//! **not** mirror the dock trees: a tree has one owner, and duplicating it would
+//! mean two things to keep in step and a migration problem in two places. Panel
+//! identity and per-panel state ride inside the dock's leaf states (see
+//! [`crate::workspace::panels::host`]).
 //!
 //! Everything here is data: parsing, validation, and serialization only. Where
 //! the document lives and when it is written belongs to
 //! [`crate::workspace::store`] and [`crate::workspace::dock`].
+//!
+//! # Schema history
+//!
+//! - 1 — workspace id and the docked workspace.
+//! - 2 — adds floating surfaces. Scheme 1 documents are read by upgrading them
+//!   in memory; a *newer* schema is refused rather than guessed at.
 
 use std::fmt;
 
 use gpui_kit::base::dock::DockAreaState;
 use serde::{Deserialize, Serialize};
 
+use crate::workspace::surface::FloatingSurfaceState;
+
 /// Schema version of the workspace document.
 ///
 /// Bumped when the document shape changes in a way an older build cannot read.
 /// The dock state inside carries its own version, which the dock checks itself.
-pub const WORKSPACE_DOCUMENT_SCHEMA: u32 = 1;
+pub const WORKSPACE_DOCUMENT_SCHEMA: u32 = 2;
 
 /// A saved workspace.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -27,15 +36,28 @@ pub struct WorkspaceDocument {
     schema: u32,
     workspace: String,
     dock: DockAreaState,
+    /// Floating surfaces, in stacking order. Absent in a schema 1 document.
+    #[serde(default)]
+    surfaces: Vec<FloatingSurfaceState>,
 }
 
 impl WorkspaceDocument {
     /// A document for `workspace` at the current schema version.
     pub fn current(workspace: impl Into<String>, dock: DockAreaState) -> Self {
+        Self::with_surfaces(workspace, dock, Vec::new())
+    }
+
+    /// A document holding the docked workspace and its floating surfaces.
+    pub fn with_surfaces(
+        workspace: impl Into<String>,
+        dock: DockAreaState,
+        surfaces: Vec<FloatingSurfaceState>,
+    ) -> Self {
         Self {
             schema: WORKSPACE_DOCUMENT_SCHEMA,
             workspace: workspace.into(),
             dock,
+            surfaces,
         }
     }
 
@@ -59,9 +81,29 @@ impl WorkspaceDocument {
         self.dock
     }
 
+    /// The floating surfaces, in stacking order.
+    pub fn surfaces(&self) -> &[FloatingSurfaceState] {
+        &self.surfaces
+    }
+
+    /// Take the floating surfaces, for rebuilding them.
+    pub fn into_surfaces(self) -> Vec<FloatingSurfaceState> {
+        self.surfaces
+    }
+
+    /// Split the document into the docked state and the floating surfaces.
+    pub fn into_parts(self) -> (DockAreaState, Vec<FloatingSurfaceState>) {
+        (self.dock, self.surfaces)
+    }
+
     /// Check that this document can be restored into `workspace`.
+    ///
+    /// A document from an older schema is accepted: every change so far has
+    /// been additive, so the older shape is a subset this build reads directly
+    /// (see [`Self::upgraded`]). A newer schema is refused — it may describe
+    /// surfaces this build has no way to reproduce.
     pub fn validate(&self, workspace: &str) -> Result<(), DocumentError> {
-        if self.schema != WORKSPACE_DOCUMENT_SCHEMA {
+        if self.schema > WORKSPACE_DOCUMENT_SCHEMA {
             return Err(DocumentError::Schema {
                 found: self.schema,
                 expected: WORKSPACE_DOCUMENT_SCHEMA,
@@ -74,6 +116,16 @@ impl WorkspaceDocument {
             });
         }
         Ok(())
+    }
+
+    /// Bring an older document up to the current schema.
+    ///
+    /// Called after [`Self::validate`] accepted it. The only migration so far
+    /// is schema 1 → 2: a document written before floating surfaces existed
+    /// simply has none.
+    pub fn upgraded(mut self) -> Self {
+        self.schema = WORKSPACE_DOCUMENT_SCHEMA;
+        self
     }
 
     /// Serialize for storage.
@@ -126,6 +178,7 @@ impl std::error::Error for DocumentError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workspace::surface::{FloatingSurfaceState, SurfaceBounds, SurfaceId};
     use gpui_kit::base::dock::{PanelInfo, PanelState};
 
     fn dock_state() -> DockAreaState {
@@ -193,5 +246,59 @@ mod tests {
 
         assert!(matches!(error, DocumentError::Json(_)));
         assert!(error.to_string().contains("not readable"));
+    }
+
+    #[test]
+    fn a_schema_one_document_still_loads_and_gains_no_surfaces() {
+        // Written before floating surfaces existed: no `surfaces` key at all.
+        let raw = format!(
+            r#"{{"schema":1,"workspace":"brucebox.default","dock":{}}}"#,
+            serde_json::to_string(&dock_state()).unwrap()
+        );
+
+        let document = WorkspaceDocument::from_json(&raw).expect("an older document parses");
+        document
+            .validate("brucebox.default")
+            .expect("an older schema is readable");
+
+        let upgraded = document.upgraded();
+        assert_eq!(upgraded.schema(), WORKSPACE_DOCUMENT_SCHEMA);
+        assert!(upgraded.surfaces().is_empty());
+        assert_eq!(upgraded.dock().center.children.len(), 1);
+    }
+
+    #[test]
+    fn surfaces_round_trip_with_the_docked_workspace() {
+        let surface = FloatingSurfaceState::new(
+            SurfaceId::next(),
+            SurfaceBounds::new(64., 48., 500., 320.),
+            3,
+            dock_state(),
+        );
+        let document = WorkspaceDocument::with_surfaces(
+            "brucebox.default",
+            dock_state(),
+            vec![surface.clone()],
+        );
+
+        let raw = document.to_json().expect("the document serializes");
+        let parsed = WorkspaceDocument::from_json(&raw).expect("the document parses");
+
+        assert_eq!(parsed.surfaces(), &[surface.clone()]);
+        assert_eq!(parsed.surfaces()[0].bounds(), surface.bounds());
+        assert_eq!(parsed.surfaces()[0].z(), 3);
+    }
+
+    #[test]
+    fn a_document_without_a_surfaces_key_reads_as_no_surfaces() {
+        let raw = format!(
+            r#"{{"schema":{},"workspace":"brucebox.default","dock":{}}}"#,
+            WORKSPACE_DOCUMENT_SCHEMA,
+            serde_json::to_string(&dock_state()).unwrap()
+        );
+
+        let document = WorkspaceDocument::from_json(&raw).expect("a missing list is empty");
+
+        assert!(document.surfaces().is_empty());
     }
 }

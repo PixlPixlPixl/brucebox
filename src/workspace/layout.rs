@@ -158,6 +158,9 @@ pub enum WorkspaceDiagnostic {
     RestoreFailed { reason: SharedString },
     /// A workspace document could not be written.
     SaveFailed { reason: SharedString },
+    /// A panel could not be moved between the docked workspace and a floating
+    /// surface, so it stayed where it was.
+    TransferFailed { reason: SharedString },
 }
 
 impl fmt::Display for WorkspaceDiagnostic {
@@ -180,6 +183,9 @@ impl fmt::Display for WorkspaceDiagnostic {
             ),
             Self::SaveFailed { reason } => {
                 write!(f, "the workspace layout could not be saved: {reason}")
+            }
+            Self::TransferFailed { reason } => {
+                write!(f, "a panel could not be moved: {reason}")
             }
         }
     }

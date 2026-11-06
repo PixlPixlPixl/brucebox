@@ -24,6 +24,10 @@ Completed so far:
   Panel instance identity and plugin state persist even when the owning plugin is
   missing. Decisions in
   [`docs/adr/0002-workspace-persistence.md`](docs/adr/0002-workspace-persistence.md).
+- Step 3 — floating surfaces: a panel can be lifted out of the docked workspace
+  into a movable, resizable group with its own dock area, its own stacking
+  position, and its geometry saved with the workspace. Decisions in
+  [`docs/adr/0003-floating-surfaces.md`](docs/adr/0003-floating-surfaces.md).
 
 ## Build and run
 
@@ -50,8 +54,8 @@ workspace UI.
 
 There is no window manager or xdotool on such a display. The `scripts/x11-*.py`
 helpers drive it through XTEST and X11 client messages instead: close a window
-gracefully (`x11-close-window.py`), press a shortcut (`x11-key.py`), or click
-(`x11-click.py`).
+gracefully (`x11-close-window.py`), press a shortcut (`x11-key.py`), click
+(`x11-click.py`), move the pointer (`x11-move.py`), or drag (`x11-drag.py`).
 
 ## Workspace state
 
@@ -66,6 +70,24 @@ macOS, and `$XDG_DATA_HOME/brucebox` (or `~/.local/share/brucebox`) elsewhere.
 - A document that cannot be restored is moved aside to `.json.invalid` and the
   default preset is used, so a newer build's layout is never silently overwritten.
 - `ctrl-shift-r` resets the workspace to the default preset.
+- Floating surfaces and their bounds are part of the same document. A surface
+  that cannot be restored takes the whole document with it: a half-restored
+  workspace is never saved back over the real one.
+
+## Floating surfaces
+
+A floating surface is a group of panels above the docked workspace: it moves by
+its title bar, resizes from its edges and corner, raises when clicked, and holds
+its own tabs and splits. Panels move between it and the dock as the *same*
+panel — no recreation, no state loss.
+
+- `ctrl-shift-f` — float the active panel of the area under the pointer; press it
+  again over a floating panel to dock that panel back.
+- `ctrl-shift-d` — dock every floating panel back into the workspace.
+- The **Dock** button on a surface does the same for that one surface.
+
+Dragging a panel across surfaces is not wired yet; the transfer seam it needs is
+in place (see ADR 0003).
 
 ## Layout
 
@@ -81,7 +103,9 @@ src/
     ├── preset.rs           first-run layout data
     ├── document.rs         the versioned, persisted workspace document
     ├── store.rs            where that document lives and how it is written
-    ├── dock.rs             live GPUI Base Dock area, save lifecycle, reset
+    ├── surface.rs          floating surface identity and geometry (pure)
+    ├── floating.rs         the live floating surface and its drags
+    ├── dock.rs             live dock areas, panel transfers, save lifecycle
     ├── contributions.rs    contributions this build ships
     ├── panels/             host panel handle, placeholder, proving panels
     └── presentation/       replaceable dock renderer

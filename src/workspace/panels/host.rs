@@ -43,6 +43,8 @@ pub struct HostPanel {
     panel_name: &'static str,
     focus_handle: FocusHandle,
     inner: Arc<dyn PanelView>,
+    /// Set while the workspace is moving this panel to another dock area.
+    transferring: bool,
 }
 
 impl HostPanel {
@@ -55,6 +57,7 @@ impl HostPanel {
             panel_name,
             focus_handle,
             inner,
+            transferring: false,
         })
     }
 
@@ -85,6 +88,21 @@ impl HostPanel {
     /// The plugin's own panel entity.
     pub fn inner(&self) -> &Arc<dyn PanelView> {
         &self.inner
+    }
+
+    /// Record that the workspace is moving this panel, not closing it.
+    ///
+    /// The dock reports a panel that leaves its tree as removed, which is the
+    /// signal a plugin tears down on. A transfer between the docked workspace
+    /// and a floating surface keeps the same panel entity and state, so the
+    /// notice is withheld until the panel lands; see [`Panel::on_removed`].
+    pub fn begin_transfer(&mut self) {
+        self.transferring = true;
+    }
+
+    /// Clear the transfer flag without a matching removal.
+    pub fn end_transfer(&mut self) {
+        self.transferring = false;
     }
 }
 
@@ -123,6 +141,13 @@ impl Panel for HostPanel {
     }
 
     fn on_removed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // One flag, one removal: a transfer clears it here rather than on the
+        // caller's happy path, so a move that fails half way cannot leave the
+        // panel unable to hear a real close later.
+        if self.transferring {
+            self.transferring = false;
+            return;
+        }
         self.inner.on_removed(window, cx);
     }
 
