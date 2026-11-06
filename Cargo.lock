@@ -608,9 +608,11 @@ dependencies = [
 name = "brucebox"
 version = "0.1.0"
 dependencies = [
+ "cordis-rs",
  "gpui-kit",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -856,6 +858,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
 dependencies = [
  "unicode-segmentation",
+]
+
+[[package]]
+name = "cordis-core"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c66612b77752dc3f0bd78b0d080ffa50317b87586d4ff1673f349a2105fd195"
+dependencies = [
+ "futures",
+ "parking_lot",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "cordis-rs"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8fb85b19b398ffb6ea56a5b3258039f83dc5b138d3f2f1971a41558e74c72f1"
+dependencies = [
+ "cordis-core",
 ]
 
 [[package]]
@@ -5344,6 +5367,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
 dependencies = [
  "pin-project-lite",
+ "tokio-macros",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
 ]
 
 [[package]]

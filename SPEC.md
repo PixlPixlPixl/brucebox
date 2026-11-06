@@ -565,6 +565,8 @@ The host must maintain explicit ownership of Cordis lifecycle handles and plugin
 
 Follow Cordis's actual lifecycle and teardown semantics instead of assuming dropping a handle automatically stops a plugin.
 
+**Implemented bridge (step 4).** The runtime runs on its own worker threads and the two sides exchange plain-data messages: a plugin *declares* its panel contributions (ids, titles, multiplicity) and the application thread joins that declaration with a panel factory it holds, because a factory builds GPUI entities and cannot move off the application thread. Typed events, service availability and lifecycle phases travel the same way, and the application thread applies them to the panel catalog and to a host status view. Services are lifecycle prerequisites: a plugin whose required service is missing stays `Pending` and never applies. The host keeps every lifecycle handle and disposes them newest-first at quit, attempt-all. See [`docs/adr/0004-cordis-composition-runtime.md`](docs/adr/0004-cordis-composition-runtime.md).
+
 ---
 
 ## 7. Initial project structure

@@ -28,6 +28,10 @@ Completed so far:
   into a movable, resizable group with its own dock area, its own stacking
   position, and its geometry saved with the workspace. Decisions in
   [`docs/adr/0003-floating-surfaces.md`](docs/adr/0003-floating-surfaces.md).
+- Step 4 — the composition runtime: one host-owned Cordis runtime, and a bridge
+  that carries plugin contributions, typed events and lifecycle state to the
+  interface as messages. Decisions in
+  [`docs/adr/0004-cordis-composition-runtime.md`](docs/adr/0004-cordis-composition-runtime.md).
 
 ## Build and run
 
@@ -89,6 +93,26 @@ panel — no recreation, no state loss.
 Dragging a panel across surfaces is not wired yet; the transfer seam it needs is
 in place (see ADR 0003).
 
+## Composition runtime
+
+There is one Cordis runtime, owned by the host, on its own worker threads
+(`cordis-rs 0.11.1`). It owns plugin lifecycle, service dependencies, typed
+events, and generation-owned cleanup — the workspace does not have a second event
+bus, DI container or lifecycle system, and it does not import Cordis.
+
+Plugins run off the application thread, so the boundary between them and the UI
+is a mailbox of plain data, not a shared `&mut App`:
+
+- a plugin **declares** its panels (ids, titles, multiplicity); the factory that
+  builds them stays on the application thread, because it produces GPUI entities;
+- a plugin **requires** services it cannot work without, and stays `Pending`
+  until they exist instead of failing;
+- lifecycle phases, declarations and withdrawals arrive as messages that the
+  application thread applies to the catalog and to the **Activity** panel.
+
+The panels this build ships are submitted as a plugin through that same path, so
+there is no special case for built-in contributions.
+
 ## Layout
 
 ```text
@@ -96,9 +120,17 @@ src/
 ├── main.rs                 binary: GPUI bootstrap, then the host window
 ├── lib.rs                  host library
 ├── app.rs                  application shell
+├── runtime/
+│   ├── mod.rs              the host-owned Cordis runtime and its lifecycle
+│   ├── contract.rs         the workspace service and typed events
+│   ├── composition.rs      the host's own plugins (adapter, contributions)
+│   ├── bridge.rs           runtime → UI mailbox, as plain data
+│   ├── ui.rs               applying those messages with `&mut App`
+│   └── error.rs            composition failures
 └── workspace/
     ├── ids.rs              plugin, panel type, panel instance identity
-    ├── catalog.rs          panel descriptors, plugin records, dock bridge
+    ├── catalog.rs          panel descriptors, factories, plugin records
+    ├── declaration.rs      what a plugin contributes, as data
     ├── layout.rs           layout data and planning (pure)
     ├── preset.rs           first-run layout data
     ├── document.rs         the versioned, persisted workspace document
@@ -106,7 +138,8 @@ src/
     ├── surface.rs          floating surface identity and geometry (pure)
     ├── floating.rs         the live floating surface and its drags
     ├── dock.rs             live dock areas, panel transfers, save lifecycle
-    ├── contributions.rs    contributions this build ships
+    ├── status.rs           what the composition runtime is doing
+    ├── contributions.rs    panel factories and the declaration this build ships
     ├── panels/             host panel handle, placeholder, proving panels
     └── presentation/       replaceable dock renderer
 ```
@@ -121,3 +154,5 @@ only through the catalog and a layout.
 - Plugin crates are not members of this Cargo project and are not built by it.
 - Normal startup never runs Cargo.
 - Missing or failed plugins show placeholders and keep persisted layout state.
+- The workspace learns about panels and plugin lifecycle as data; only
+  `runtime/` names a Cordis type.

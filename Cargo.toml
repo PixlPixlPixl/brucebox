@@ -7,6 +7,13 @@ edition = "2024"
 version = "=0.9.0"
 default-features = false
 
+[dependencies.cordis-rs]
+version = "=0.11.1"
+
+[dependencies.tokio]
+version = "1"
+features = ["rt-multi-thread", "sync", "time", "macros"]
+
 [dependencies.serde]
 version = "1"
 features = ["derive"]

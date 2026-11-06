@@ -284,7 +284,7 @@ mod tests {
         let raw = document.to_json().expect("the document serializes");
         let parsed = WorkspaceDocument::from_json(&raw).expect("the document parses");
 
-        assert_eq!(parsed.surfaces(), &[surface.clone()]);
+        assert_eq!(parsed.surfaces(), std::slice::from_ref(&surface));
         assert_eq!(parsed.surfaces()[0].bounds(), surface.bounds());
         assert_eq!(parsed.surfaces()[0].z(), 3);
     }

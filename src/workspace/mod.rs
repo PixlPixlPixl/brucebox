@@ -4,6 +4,7 @@
 //!
 //! - [`ids`] — plugin, panel type, and panel instance identity.
 //! - [`catalog`] — what panels exist, who owns them, and how to create one.
+//! - [`declaration`] — what a plugin says it contributes, as data.
 //! - [`layout`] — layout data and the plan that resolves type ids to panels.
 //! - [`preset`] — the first-run arrangement, as data.
 //! - [`document`] — the versioned document a workspace is saved as.
@@ -12,13 +13,17 @@
 //! - [`floating`] — the live floating surface view, its chrome, and its drags.
 //! - [`dock`] — the live workspace: docked areas, floating surfaces, saves.
 //! - [`panels`] — the host handle plus the panels this build ships.
+//! - [`status`] — what the host's composition runtime is doing.
 //! - [`presentation`] — the replaceable dock renderer.
 //!
-//! Nothing here knows a concrete plugin implementation. The Cordis runtime and
-//! the plugin loader arrive in later milestones on top of these seams.
+//! Nothing here knows a concrete plugin implementation, and nothing here imports
+//! the composition runtime: a plugin crosses into the workspace as a
+//! [`declaration`], and a lifecycle fact crosses as [`status`] data. The Cordis
+//! runtime (`crate::runtime`) sits on top of both.
 
 pub mod catalog;
 pub mod contributions;
+pub mod declaration;
 pub mod dock;
 pub mod document;
 pub mod floating;
@@ -27,6 +32,7 @@ pub mod layout;
 pub mod panels;
 pub mod presentation;
 pub mod preset;
+pub mod status;
 pub mod store;
 pub mod surface;
 
@@ -46,15 +52,23 @@ pub const FLOAT_ACTIVE_PANEL_KEY: &str = "ctrl-shift-f";
 /// Key binding for "bring every floating panel back into the docked workspace".
 pub const DOCK_FLOATING_SURFACES_KEY: &str = "ctrl-shift-d";
 
-/// Install the workspace-level host services, startup contributions, and input
+/// Install the workspace-level host services, panel factories, and input
 /// bindings.
 ///
 /// Must run after GPUI Kit Base is initialised and before a window is opened:
 /// the dock's restore registry and the panel catalog both have to exist before
-/// the first layout is resolved.
+/// the first layout is resolved, and the factories have to be in place before
+/// the composition runtime declares its contributions — which happens in
+/// [`runtime::install`](crate::runtime::install), before the window opens too.
 pub fn init(cx: &mut App) -> Result<(), catalog::CatalogError> {
     catalog::init(cx);
-    contributions::register(cx)?;
+    status::init(cx);
+
+    // Only the factories are installed here. Which panels exist is decided by
+    // the composition runtime: it submits the contributions this build ships as
+    // a plugin, and those arrive as declarations. Registering the same panels
+    // here as well would make the declaration a duplicate.
+    contributions::install_factories(cx);
 
     cx.bind_keys([
         gpui_kit::KeyBinding::new(RESET_WORKSPACE_KEY, ResetWorkspace, None),

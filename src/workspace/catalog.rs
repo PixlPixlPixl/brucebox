@@ -32,6 +32,8 @@ use gpui_kit::{App, Global, SharedString, Window};
 
 pub use super::ids::{PanelIdentity, PanelInstanceId, PanelTypeId, PluginId};
 
+use super::declaration::PluginDeclaration;
+
 /// How many live instances one panel type supports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PanelMultiplicity {
@@ -298,6 +300,13 @@ pub enum CatalogError {
     DuplicatePanel(PanelTypeId),
     /// Nothing is registered for this panel type.
     UnknownPanel(PanelTypeId),
+    /// A declared panel has no factory on the application thread.
+    ///
+    /// A declaration names a panel; the code that builds it is supplied by
+    /// whoever runs the plugin (today the host, from the plugin loader once it
+    /// exists). Without a factory the contribution cannot be accepted, and
+    /// failing here is better than accepting a panel nobody can create.
+    MissingPanelFactory(PanelTypeId),
 }
 
 impl fmt::Display for CatalogError {
@@ -314,6 +323,9 @@ impl fmt::Display for CatalogError {
             }
             Self::UnknownPanel(panel) => {
                 write!(f, "panel type `{panel}` is not registered")
+            }
+            Self::MissingPanelFactory(panel) => {
+                write!(f, "panel type `{panel}` has no factory in this build")
             }
         }
     }
@@ -450,6 +462,72 @@ pub fn catalog_mut(cx: &mut App) -> &mut PanelCatalog {
     cx.global_mut::<PanelCatalog>()
 }
 
+/// The host's panel factories, keyed by panel type id.
+///
+/// A plugin *declares* a panel by id and metadata; the code that builds it
+/// lives on the application thread, because a factory produces GPUI entities
+/// and cannot be moved off it (SPEC §6). This table is that side of the
+/// boundary: whoever can build a plugin's panels puts them here, and
+/// [`register_declaration`] pairs a declaration up with them.
+#[derive(Default)]
+pub struct PanelFactories {
+    factories: BTreeMap<PanelTypeId, Rc<dyn PanelFactory>>,
+}
+
+impl PanelFactories {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Offer a factory for one panel type; a later one replaces it.
+    pub fn insert(
+        &mut self,
+        panel_type: PanelTypeId,
+        factory: Rc<dyn PanelFactory>,
+    ) -> Option<Rc<dyn PanelFactory>> {
+        self.factories.insert(panel_type, factory)
+    }
+
+    /// The factory for one panel type.
+    pub fn get(&self, panel_type: &PanelTypeId) -> Option<&Rc<dyn PanelFactory>> {
+        self.factories.get(panel_type)
+    }
+
+    /// Drop one factory, for a plugin whose code is going away.
+    pub fn remove(&mut self, panel_type: &PanelTypeId) -> Option<Rc<dyn PanelFactory>> {
+        self.factories.remove(panel_type)
+    }
+
+    /// How many factories the host holds.
+    pub fn len(&self) -> usize {
+        self.factories.len()
+    }
+
+    /// Whether the host holds no factories at all.
+    pub fn is_empty(&self) -> bool {
+        self.factories.is_empty()
+    }
+}
+
+impl Global for PanelFactories {}
+
+/// Install an empty factory table if the host has not done so yet.
+pub fn init_factories(cx: &mut App) {
+    if cx.try_global::<PanelFactories>().is_none() {
+        cx.set_global(PanelFactories::new());
+    }
+}
+
+/// The host's factory table. Panics if [`init_factories`] has not run.
+pub fn factories(cx: &App) -> &PanelFactories {
+    cx.global::<PanelFactories>()
+}
+
+/// The host's factory table, mutably.
+pub fn factories_mut(cx: &mut App) -> &mut PanelFactories {
+    cx.global_mut::<PanelFactories>()
+}
+
 /// Register a plugin and one of its panels, and bridge that panel into GPUI
 /// Base Dock's restore registry.
 ///
@@ -463,14 +541,28 @@ pub fn register_contribution(
     init(cx);
     let descriptor = Rc::new(descriptor);
     let panel_type = descriptor.panel_type().clone();
-    catalog_mut(cx).register_panel(descriptor.clone())?;
+    catalog_mut(cx).register_panel(descriptor)?;
 
-    let restore = descriptor;
-    let panel_name = panel_type.as_str();
+    let restore_type = panel_type.clone();
+    let panel_name = panel_type.as_static_str();
     register_dock_panel(cx, panel_name, move |build, window, cx| {
         let state = build.state().clone();
         let (instance, panel_state, recorded_owner) =
             crate::workspace::panels::host::restore_state(&state);
+
+        // Resolve the contribution now, not from a descriptor captured here:
+        // the plugin that owned it may have been unloaded since the layout was
+        // written. A withdrawn contribution restores as a placeholder that
+        // keeps the saved state, exactly like a plugin that never loaded.
+        let Some(restore) =
+            try_catalog(cx).and_then(|catalog| catalog.panel(&restore_type).cloned())
+        else {
+            return crate::workspace::panels::missing::view_for_state(
+                &state,
+                format!("the `{panel_name}` contribution is not loaded"),
+                cx,
+            );
+        };
 
         // A leaf that says it came from another plugin is not ours to restore:
         // handing that payload to this factory would interpret another plugin's
@@ -497,6 +589,73 @@ pub fn register_contribution(
     });
 
     Ok(panel_type)
+}
+
+/// Accept a plugin's declaration, pairing each declared panel with a factory
+/// the host already holds.
+///
+/// The whole declaration is checked before anything is registered, so a plugin
+/// whose build is missing one factory is refused entire rather than landing
+/// half-contributed — a partial registration would put panels in the catalog
+/// that a restored layout could name and nothing could build.
+pub fn register_declaration(
+    cx: &mut App,
+    declaration: &PluginDeclaration,
+) -> Result<(), CatalogError> {
+    init(cx);
+    init_factories(cx);
+
+    let mut descriptors = Vec::with_capacity(declaration.panels().len());
+    for panel in declaration.panels() {
+        let panel_type = panel.panel_type();
+        if catalog(cx).panel(panel_type).is_some() {
+            return Err(CatalogError::DuplicatePanel(panel_type.clone()));
+        }
+        let Some(factory) = factories(cx).get(panel_type).cloned() else {
+            return Err(CatalogError::MissingPanelFactory(panel_type.clone()));
+        };
+        let descriptor = PanelDescriptor::new(
+            declaration.plugin().clone(),
+            panel_type.name(),
+            panel.title(),
+            factory,
+        )
+        .map_err(|_| CatalogError::UnknownPanel(panel_type.clone()))?
+        .with_multiplicity(panel.multiplicity());
+        let descriptor = match panel.icon() {
+            Some(icon) => descriptor.with_icon(icon),
+            None => descriptor,
+        };
+        descriptors.push(descriptor);
+    }
+
+    catalog_mut(cx).register_plugin(PluginRegistration::new(
+        declaration.plugin().clone(),
+        declaration.display_name(),
+    ))?;
+    for descriptor in descriptors {
+        register_contribution(cx, descriptor)?;
+    }
+
+    Ok(())
+}
+
+/// Withdraw a plugin and every panel it declared.
+///
+/// Live panels are not destroyed: the next layout resolution reports them as
+/// unavailable and their saved state is kept, which is the same policy a plugin
+/// that failed to load gets. GPUI Base Dock's own builder for the panel name is
+/// left in place and is harmless, because [`register_contribution`]'s builder
+/// resolves through this catalog every time it runs.
+pub fn withdraw_declaration(
+    cx: &mut App,
+    plugin: &PluginId,
+) -> Result<Vec<PanelTypeId>, CatalogError> {
+    let removed = catalog_mut(cx).unregister_plugin(plugin)?;
+    for panel_type in &removed {
+        factories_mut(cx).remove(panel_type);
+    }
+    Ok(removed)
 }
 
 #[cfg(test)]
