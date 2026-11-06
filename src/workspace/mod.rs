@@ -42,7 +42,12 @@ use gpui_kit::App;
 
 gpui_kit::actions!(
     brucebox,
-    [ResetWorkspace, FloatActivePanel, DockFloatingSurfaces]
+    [
+        ResetWorkspace,
+        FloatActivePanel,
+        DockFloatingSurfaces,
+        OpenPanelCatalog
+    ]
 );
 
 /// Key binding for the explicit "reset this workspace to the default preset".
@@ -51,6 +56,45 @@ pub const RESET_WORKSPACE_KEY: &str = "ctrl-shift-r";
 pub const FLOAT_ACTIVE_PANEL_KEY: &str = "ctrl-shift-f";
 /// Key binding for "bring every floating panel back into the docked workspace".
 pub const DOCK_FLOATING_SURFACES_KEY: &str = "ctrl-shift-d";
+/// Key binding for "open the panel catalog".
+pub const OPEN_PANEL_CATALOG_KEY: &str = "ctrl-shift-p";
+
+/// The workspace that is open, for panels that ask the host to open another one.
+///
+/// The panel catalog is a normal panel: it can be closed, and this is what lets
+/// it (or any future panel) ask the workspace to open a contribution without
+/// knowing the dock's type. It is a host-side registry, not a plugin API.
+pub struct ActiveWorkspace(pub gpui_kit::Entity<dock::BruceboxWorkspace>);
+
+impl gpui_kit::Global for ActiveWorkspace {}
+
+/// Remember the workspace this window shows.
+pub fn install_active_workspace(
+    cx: &mut App,
+    workspace: gpui_kit::Entity<dock::BruceboxWorkspace>,
+) {
+    cx.set_global(ActiveWorkspace(workspace));
+}
+
+/// Open one registered panel type in the active workspace.
+///
+/// Fails when no workspace is open, when nothing registers the type, or when the
+/// type already has as many instances open as it allows.
+pub fn open_panel(
+    window: &mut gpui_kit::Window,
+    cx: &mut App,
+    panel_type: &ids::PanelTypeId,
+) -> Result<(), String> {
+    let Some(workspace) = cx
+        .try_global::<ActiveWorkspace>()
+        .map(|active| active.0.clone())
+    else {
+        return Err("no workspace is open".to_owned());
+    };
+    workspace.update(cx, |workspace, cx| {
+        workspace.open_panel(panel_type, window, cx)
+    })
+}
 
 /// Install the workspace-level host services, panel factories, and input
 /// bindings.
@@ -74,6 +118,7 @@ pub fn init(cx: &mut App) -> Result<(), catalog::CatalogError> {
         gpui_kit::KeyBinding::new(RESET_WORKSPACE_KEY, ResetWorkspace, None),
         gpui_kit::KeyBinding::new(FLOAT_ACTIVE_PANEL_KEY, FloatActivePanel, None),
         gpui_kit::KeyBinding::new(DOCK_FLOATING_SURFACES_KEY, DockFloatingSurfaces, None),
+        gpui_kit::KeyBinding::new(OPEN_PANEL_CATALOG_KEY, OpenPanelCatalog, None),
     ]);
 
     Ok(())

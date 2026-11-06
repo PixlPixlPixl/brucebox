@@ -686,7 +686,9 @@ requires = ["brucebox.git", "brucebox.workspace@0.1"]
 
     #[test]
     fn another_api_version_is_refused_with_the_versions_named() {
-        let manifest = Manifest::parse(&good().replace("api_version = 1", "api_version = 7"));
+        let manifest = Manifest::parse(
+            &good().replace(&format!("api_version = {API_VERSION}"), "api_version = 7"),
+        );
 
         match manifest {
             Err(ManifestError::ApiVersion {

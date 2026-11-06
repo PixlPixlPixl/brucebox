@@ -31,6 +31,7 @@ use super::catalog::{
 use super::declaration::{PanelDeclaration, PluginDeclaration};
 use super::panels::demo::{ActivityPanel, DemoPanel};
 use super::panels::host::HostPanel;
+use super::panels::launcher::LauncherPanel;
 use super::panels::plugins::PluginsPanel;
 
 /// Plugin id owning the temporary proving panels.
@@ -49,6 +50,8 @@ pub const SCRATCH_PANEL: &str = "brucebox.demo.scratch";
 pub const ACTIVITY_PANEL: &str = "brucebox.demo.activity";
 /// Panel type id of the plugins panel.
 pub const PLUGINS_PANEL: &str = "brucebox.demo.plugins";
+/// Panel type id of the panel catalog.
+pub const CATALOG_PANEL: &str = super::panels::launcher::PANEL_NAME;
 
 /// One built-in contribution: what it is called and how to build it.
 struct Contribution {
@@ -81,6 +84,12 @@ fn contributions() -> Vec<Contribution> {
             title: "Activity",
             multiplicity: PanelMultiplicity::Single,
             factory: activity_factory(),
+        },
+        Contribution {
+            segment: "panels",
+            title: "Panels",
+            multiplicity: PanelMultiplicity::Single,
+            factory: catalog_factory(),
         },
         Contribution {
             segment: "plugins",
@@ -166,6 +175,21 @@ fn demo_factory(title: &'static str, body: &'static str) -> Rc<dyn PanelFactory>
     )
 }
 
+/// A factory that builds the panel catalog, which opens contributions.
+fn catalog_factory() -> Rc<dyn PanelFactory> {
+    Rc::new(
+        |request: &PanelCreateRequest,
+         _window: &mut Window,
+         cx: &mut App|
+         -> Result<Arc<dyn PanelView>, PanelCreateError> {
+            let identity = request.identity().clone();
+            let panel = LauncherPanel::new(identity.clone(), cx);
+            let panel: Arc<dyn PanelView> = Arc::new(panel);
+            Ok(HostPanel::view(identity, panel, cx))
+        },
+    )
+}
+
 /// A factory that builds the plugins panel, which manages plugin folders.
 fn plugins_factory() -> Rc<dyn PanelFactory> {
     Rc::new(
@@ -211,7 +235,13 @@ mod tests {
 
         assert_eq!(
             ids,
-            vec![WELCOME_PANEL, SCRATCH_PANEL, ACTIVITY_PANEL, PLUGINS_PANEL]
+            vec![
+                WELCOME_PANEL,
+                SCRATCH_PANEL,
+                ACTIVITY_PANEL,
+                CATALOG_PANEL,
+                PLUGINS_PANEL
+            ]
         );
         assert!(
             panels

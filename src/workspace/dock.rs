@@ -40,6 +40,7 @@ use gpui_kit::*;
 use crate::workspace::catalog;
 use crate::workspace::document::WorkspaceDocument;
 use crate::workspace::floating::{FloatingSurfaceEvent, FloatingSurfaceView};
+use crate::workspace::ids::{PanelInstanceId, PanelTypeId};
 use crate::workspace::layout::{PlanNode, PlannedPanel, WorkspaceDiagnostic, WorkspaceLayout};
 use crate::workspace::panels::PanelHandle;
 use crate::workspace::panels::missing::MissingPanel;
@@ -47,7 +48,7 @@ use crate::workspace::presentation::debug::DebugDockRenderer;
 use crate::workspace::preset::{WORKSPACE_SCHEMA_VERSION, default_layout};
 use crate::workspace::store::WorkspaceStore;
 use crate::workspace::surface::{FloatingSurfaceState, SurfaceArea, SurfaceBounds, SurfaceId};
-use crate::workspace::{DockFloatingSurfaces, FloatActivePanel, ResetWorkspace};
+use crate::workspace::{DockFloatingSurfaces, FloatActivePanel, OpenPanelCatalog, ResetWorkspace};
 
 /// How long a layout edit waits before it is written to disk.
 ///
@@ -72,6 +73,12 @@ pub struct BruceboxWorkspace {
     store: WorkspaceStore,
     diagnostics: Vec<WorkspaceDiagnostic>,
     save_generation: u64,
+    /// How many instances of each panel type are open, kept in step with the dock.
+    ///
+    /// Cached rather than derived on demand: deriving means dumping the dock, and
+    /// dumping a panel reads its entity — which panics if the panel asking is the
+    /// one currently being updated (the catalog clicking its own row).
+    instances: std::collections::BTreeMap<PanelTypeId, usize>,
     focus_handle: FocusHandle,
     _dock_events: Subscription,
     _window_closed: Subscription,
@@ -97,7 +104,7 @@ impl BruceboxWorkspace {
     ///
     /// Restores the saved layout for the default workspace when one exists.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::with_layout(default_layout(), window, cx)
+        Self::with_layout(default_layout(cx), window, cx)
     }
 
     /// Build a workspace from an explicit layout, persisting to the default
@@ -190,6 +197,7 @@ impl BruceboxWorkspace {
         // Subscribe to the docked area only now: building the layout above
         // emits `LayoutChanged`, and that is not a user edit worth saving.
         let dock_events = cx.subscribe(&dock_area, |this, _, _: &DockEvent, cx| {
+            this.recount_instances(cx);
             this.schedule_save(cx);
         });
 
@@ -218,18 +226,24 @@ impl BruceboxWorkspace {
         });
 
         let focus_handle = cx.focus_handle();
-        let workspace = Self {
+        let mut workspace = Self {
             workspace_id,
             dock_area,
             surfaces,
             store,
             diagnostics,
             save_generation: 0,
+            instances: std::collections::BTreeMap::new(),
             focus_handle: focus_handle.clone(),
             _dock_events: dock_events,
             _window_closed: window_closed,
             _app_quit: app_quit,
         };
+
+        // One count for the dock as built or restored, so opening a panel from the
+        // catalog knows how many instances already exist.
+        let counts = workspace.instance_counts(cx);
+        workspace.instances = counts;
 
         // The workspace root owns focus until a panel claims it, so workspace
         // level actions (the reset and float shortcuts) dispatch without a
@@ -274,13 +288,14 @@ impl BruceboxWorkspace {
     /// are discarded and the default docked arrangement is written in their
     /// place.
     pub fn reset_to_default(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let layout = default_layout();
+        let layout = default_layout(cx);
         let (dock_layout, plan_diagnostics) = build_default_layout(&layout, window, cx);
 
         self.surfaces.clear();
         self.dock_area.update(cx, |area, cx| {
             area.set_center(dock_layout, window, cx);
         });
+        self.recount_instances(cx);
 
         self.diagnostics.retain(|diagnostic| {
             !matches!(
@@ -297,6 +312,107 @@ impl BruceboxWorkspace {
         }
         self.flush(cx);
         cx.notify();
+    }
+
+    /// How many instances of each panel type are open, as last counted.
+    ///
+    /// Cheap and safe to call from a panel that is mid-update; the dock event
+    /// subscription keeps it current.
+    pub fn open_instances(&self) -> &std::collections::BTreeMap<PanelTypeId, usize> {
+        &self.instances
+    }
+
+    /// Recount open instances from the live dock.
+    ///
+    /// Must not run while a panel is being updated: dumping the dock reads every
+    /// panel entity, including the one calling in.
+    fn recount_instances(&mut self, cx: &App) {
+        self.instances = self.instance_counts(cx);
+    }
+
+    /// How many instances of each panel type this workspace currently holds.
+    ///
+    /// Read back from the dock itself rather than tracked alongside it, so a
+    /// restored document, a floated panel and a panel opened from the catalog all
+    /// count the same way.
+    pub fn instance_counts(&self, cx: &App) -> std::collections::BTreeMap<PanelTypeId, usize> {
+        let document = self.document(cx);
+        let mut counts = std::collections::BTreeMap::new();
+        count_panels(&document.dock().center, &mut counts);
+        for surface in document.surfaces() {
+            count_panels(&surface.dock().center, &mut counts);
+        }
+        counts
+    }
+
+    /// Open one registered panel type in the docked workspace.
+    ///
+    /// This is how the panel catalog opens a contribution, and it is the only
+    /// path that creates a panel outside a saved layout or the first-run preset.
+    /// The panel is created by its plugin's factory and placed in the centre dock,
+    /// where the dock merges it into the first tab group.
+    ///
+    /// Fails, with a reason for the status view, when nothing registers the type
+    /// (its plugin is not installed) or when the type already has all the
+    /// instances its declaration allows.
+    pub fn open_panel(
+        &mut self,
+        panel_type: &PanelTypeId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let descriptor = catalog::try_catalog(cx)
+            .and_then(|catalog| {
+                catalog
+                    .panels()
+                    .find(|descriptor| descriptor.panel_type() == panel_type)
+                    .cloned()
+            })
+            .ok_or_else(|| format!("no plugin registers a panel type `{}`", panel_type.as_str()))?;
+
+        let open = self.instances.get(panel_type).copied().unwrap_or_default();
+        if !descriptor.allows_additional_instance(open) {
+            return Err(format!(
+                "`{}` allows {} instance(s) and {open} is already open",
+                panel_type.as_str(),
+                descriptor.multiplicity().max_instances().unwrap_or(0)
+            ));
+        }
+
+        let instance = PanelInstanceId::next();
+        let view = descriptor
+            .create(instance, None, window, cx)
+            .map_err(|error| format!("`{}` could not be built: {error}", panel_type.as_str()))?;
+
+        self.dock_area.update(cx, |area, cx| {
+            area.add_panel_view(view, DockPlacement::Center, None, window, cx);
+        });
+        *self.instances.entry(panel_type.clone()).or_default() += 1;
+        // Debounced, not synchronous: opening from a panel runs inside that
+        // panel's update, and dumping the dock reads every panel entity —
+        // including the one that asked.
+        self.schedule_save(cx);
+        cx.notify();
+        Ok(())
+    }
+
+    /// Open this build's panel catalog, if it registers one.
+    pub fn open_panel_catalog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let panel_type = catalog::try_catalog(cx).and_then(|catalog| {
+            catalog
+                .panels()
+                .map(|descriptor| descriptor.panel_type().clone())
+                .find(|panel_type| {
+                    panel_type.as_str() == crate::workspace::contributions::CATALOG_PANEL
+                })
+        });
+        let Some(panel_type) = panel_type else {
+            self.record_transfer_error("this build registers no panel catalog", cx);
+            return;
+        };
+        if let Err(reason) = self.open_panel(&panel_type, window, cx) {
+            self.record_transfer_error(reason, cx);
+        }
     }
 
     /// Float the active panel, or dock it again if it is already floating.
@@ -442,6 +558,7 @@ impl BruceboxWorkspace {
             .with_renderer(Rc::new(DebugDockRenderer))
         });
         let dock_events = cx.subscribe(&dock_area, |this, _, _: &DockEvent, cx| {
+            this.recount_instances(cx);
             this.schedule_save(cx);
         });
         let view =
@@ -750,8 +867,27 @@ impl Render for BruceboxWorkspace {
             .on_action(cx.listener(|this, _: &DockFloatingSurfaces, window, cx| {
                 this.dock_floating_surfaces(window, cx);
             }))
+            .on_action(cx.listener(|this, _: &OpenPanelCatalog, window, cx| {
+                this.open_panel_catalog(window, cx);
+            }))
             .child(div().absolute().inset_0().child(self.dock_area.clone()))
             .children(self.surfaces.iter().map(|slot| slot.view.clone()))
+    }
+}
+
+/// Count one persisted dock tree's panels by type.
+///
+/// Container nodes (`StackPanel`, `TabPanel`) do not parse as panel type ids, so
+/// they need no special case.
+fn count_panels(
+    state: &gpui_kit::base::dock::PanelState,
+    counts: &mut std::collections::BTreeMap<PanelTypeId, usize>,
+) {
+    if let Ok(panel_type) = PanelTypeId::parse(&state.panel_name) {
+        *counts.entry(panel_type).or_default() += 1;
+    }
+    for child in &state.children {
+        count_panels(child, counts);
     }
 }
 

@@ -32,6 +32,11 @@ Completed so far:
   that carries plugin contributions, typed events and lifecycle state to the
   interface as messages. Decisions in
   [`docs/adr/0004-cordis-composition-runtime.md`](docs/adr/0004-cordis-composition-runtime.md).
+- Step 8 — the first-run workspace and the panel catalog: the default arrangement
+  is composed from what the loaded plugins registered, a `Ctrl+Shift+P` catalog
+  lists every contribution and opens it (enforcing each type's multiplicity), and
+  reset rebuilds from the current registrations. Decisions in
+  [`docs/adr/0008-first-run-workspace-and-catalog.md`](docs/adr/0008-first-run-workspace-and-catalog.md).
 - Step 7 — the cross-plugin contract: Agent Chat and Git are two separately
   compiled plugins that cooperate through a versioned data contract on a bus the
   host owns — measured, because a Cordis service value cannot cross a library
@@ -171,6 +176,20 @@ declare_plugin!(Plugin::new("com.example.hello", "Hello", "0.1.0")
 a composer, its own persisted state, and a session service published into the
 host's composition runtime.
 
+### Opening panels
+
+`Ctrl+Shift+P` opens the **Panels** catalog: every panel type the loaded plugins
+registered, grouped by plugin, with its multiplicity and how many instances are
+open. Clicking a row opens it in the dock; a single-instance type that is already
+open says so instead. The catalog is an ordinary panel — close it, move it, float
+it — and the shortcut brings it back.
+
+The first-run workspace is composed from registrations rather than fixed: the
+panel types in `preset::PREFERRED` come first (Chat, then Git's panels, then the
+host's own), every other registered type follows, and a plugin that is not
+installed is simply absent. `Ctrl+Shift+R` rebuilds that from whatever is
+registered *now*; a saved document always wins over it.
+
 ### Two plugins, one contract
 
 `plugins/git` publishes a repository snapshot and the selected file's diff on the
@@ -299,3 +318,5 @@ only through the catalog and a layout.
   differently, and a switch in the panel and `cargo xtask` write the same file.
 - Plugins cooperate through contracts, not through each other's code: a contract
   is a shared type crate plus a versioned topic on the host bus.
+- The host names plugin panels only as *ids* in the preset and the catalog; no
+  host code knows what Agent Chat or Git are.

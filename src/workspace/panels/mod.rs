@@ -10,6 +10,7 @@ use self::missing::MissingPanel;
 
 pub mod demo;
 pub mod host;
+pub mod launcher;
 pub mod missing;
 pub mod plugins;
 
