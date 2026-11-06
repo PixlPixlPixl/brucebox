@@ -25,8 +25,8 @@ use gpui_kit::base::dock::PanelView;
 use gpui_kit::{App, Window};
 
 use super::catalog::{
-    self, CatalogError, PanelCreateError, PanelCreateRequest, PanelDescriptor, PanelFactory,
-    PanelMultiplicity, PanelTypeId, PluginId, PluginRegistration,
+    self, PanelCreateError, PanelCreateRequest, PanelDescriptor, PanelFactory, PanelMultiplicity,
+    PanelTypeId, PluginId,
 };
 use super::declaration::{PanelDeclaration, PluginDeclaration};
 use super::panels::demo::{ActivityPanel, DemoPanel};
@@ -140,22 +140,6 @@ pub fn proving_panels(plugin: &PluginId) -> Vec<PanelDescriptor> {
             .with_multiplicity(contribution.multiplicity)
         })
         .collect()
-}
-
-/// Register the proving plugin and its panels directly.
-///
-/// The composition runtime takes the declaration path instead; this is the same
-/// registration without a runtime, which is what the tests that only care about
-/// the catalog use.
-pub fn register(cx: &mut App) -> Result<(), CatalogError> {
-    install_factories(cx);
-    let plugin = proving_plugin_id();
-    catalog::catalog_mut(cx)
-        .register_plugin(PluginRegistration::new(plugin.clone(), PROVING_PLUGIN_NAME))?;
-    for descriptor in proving_panels(&plugin) {
-        catalog::register_contribution(cx, descriptor)?;
-    }
-    Ok(())
 }
 
 /// A factory that builds one proving panel and hands it to the host.
