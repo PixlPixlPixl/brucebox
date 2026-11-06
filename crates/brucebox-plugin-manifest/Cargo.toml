@@ -1,0 +1,15 @@
+[package]
+name = "brucebox-plugin-manifest"
+version = "0.1.0"
+edition = "2024"
+
+# The plugin folder format, as data: manifest schema, platform library naming,
+# dependency declarations, and discovery. No library loading lives here, so both
+# the host and the developer tooling can read a package without trusting it.
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+
+[dependencies.brucebox-plugin-api]
+path = "../brucebox-plugin-api"

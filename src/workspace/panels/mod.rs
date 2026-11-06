@@ -11,6 +11,7 @@ use self::missing::MissingPanel;
 pub mod demo;
 pub mod host;
 pub mod missing;
+pub mod plugins;
 
 /// A panel view the workspace created, kept alongside the type-erased handle.
 ///

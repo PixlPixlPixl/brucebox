@@ -3,20 +3,17 @@ name = "brucebox-plugin-loader"
 version = "0.1.0"
 edition = "2024"
 
-# Native plugin discovery and loading. All `unsafe` for symbol resolution lives
-# in this crate: nothing outside it touches a library handle.
+# Native plugin loading. All `unsafe` for symbol resolution lives in this crate:
+# nothing outside it touches a library handle, and the folder format it trusts is
+# read by `brucebox-plugin-manifest`.
 
 [dependencies]
 
 [dependencies.brucebox-plugin-api]
 path = "../brucebox-plugin-api"
 
+[dependencies.brucebox-plugin-manifest]
+path = "../brucebox-plugin-manifest"
+
 [dependencies.libloading]
 version = "0.9"
-
-[dependencies.serde]
-version = "1"
-features = ["derive"]
-
-[dependencies.toml]
-version = "1"

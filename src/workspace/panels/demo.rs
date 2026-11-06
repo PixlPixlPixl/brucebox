@@ -128,6 +128,7 @@ fn plugin_row(plugin: &PluginStatus) -> Div {
         status::PluginPhase::Active => rgb(0x7dd3a0),
         status::PluginPhase::Pending => rgb(0xe2c08d),
         status::PluginPhase::Failed => rgb(0xe08d8d),
+        status::PluginPhase::Disabled => rgb(0xb4a0d0),
         status::PluginPhase::Starting | status::PluginPhase::Stopped => rgb(0x8b93a1),
     };
 

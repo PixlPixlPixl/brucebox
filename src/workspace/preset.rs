@@ -7,7 +7,7 @@
 
 use gpui_kit::px;
 
-use super::contributions::{ACTIVITY_PANEL, SCRATCH_PANEL, WELCOME_PANEL};
+use super::contributions::{ACTIVITY_PANEL, PLUGINS_PANEL, SCRATCH_PANEL, WELCOME_PANEL};
 use super::ids::PanelTypeId;
 use super::layout::{LayoutNode, WorkspaceLayout};
 
@@ -38,6 +38,7 @@ fn default_root() -> LayoutNode {
             LayoutNode::tabs()
                 .panel(panel(SCRATCH_PANEL))
                 .panel(panel(ACTIVITY_PANEL))
+                .panel(panel(PLUGINS_PANEL))
                 .active_index(0),
             None,
         )
@@ -99,7 +100,7 @@ mod tests {
         panel_ids.sort_unstable();
         assert_eq!(
             panel_ids,
-            vec![ACTIVITY_PANEL, SCRATCH_PANEL, WELCOME_PANEL]
+            vec![ACTIVITY_PANEL, PLUGINS_PANEL, SCRATCH_PANEL, WELCOME_PANEL]
         );
     }
 }

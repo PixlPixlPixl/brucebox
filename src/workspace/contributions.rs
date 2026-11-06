@@ -31,6 +31,7 @@ use super::catalog::{
 use super::declaration::{PanelDeclaration, PluginDeclaration};
 use super::panels::demo::{ActivityPanel, DemoPanel};
 use super::panels::host::HostPanel;
+use super::panels::plugins::PluginsPanel;
 
 /// Plugin id owning the temporary proving panels.
 pub const PROVING_PLUGIN: &str = "brucebox.demo";
@@ -46,6 +47,8 @@ pub const SCRATCH_PANEL: &str = "brucebox.demo.scratch";
 
 /// Panel type id of the activity panel.
 pub const ACTIVITY_PANEL: &str = "brucebox.demo.activity";
+/// Panel type id of the plugins panel.
+pub const PLUGINS_PANEL: &str = "brucebox.demo.plugins";
 
 /// One built-in contribution: what it is called and how to build it.
 struct Contribution {
@@ -78,6 +81,12 @@ fn contributions() -> Vec<Contribution> {
             title: "Activity",
             multiplicity: PanelMultiplicity::Single,
             factory: activity_factory(),
+        },
+        Contribution {
+            segment: "plugins",
+            title: "Plugins",
+            multiplicity: PanelMultiplicity::Single,
+            factory: plugins_factory(),
         },
     ]
 }
@@ -157,6 +166,21 @@ fn demo_factory(title: &'static str, body: &'static str) -> Rc<dyn PanelFactory>
     )
 }
 
+/// A factory that builds the plugins panel, which manages plugin folders.
+fn plugins_factory() -> Rc<dyn PanelFactory> {
+    Rc::new(
+        |request: &PanelCreateRequest,
+         _window: &mut Window,
+         cx: &mut App|
+         -> Result<Arc<dyn PanelView>, PanelCreateError> {
+            let identity = request.identity().clone();
+            let panel = PluginsPanel::new(identity.clone(), cx);
+            let panel: Arc<dyn PanelView> = Arc::new(panel);
+            Ok(HostPanel::view(identity, panel, cx))
+        },
+    )
+}
+
 /// A factory that builds the activity panel, which shows the host status.
 fn activity_factory() -> Rc<dyn PanelFactory> {
     Rc::new(
@@ -185,7 +209,10 @@ mod tests {
             .map(|descriptor| descriptor.panel_type().as_str())
             .collect();
 
-        assert_eq!(ids, vec![WELCOME_PANEL, SCRATCH_PANEL, ACTIVITY_PANEL]);
+        assert_eq!(
+            ids,
+            vec![WELCOME_PANEL, SCRATCH_PANEL, ACTIVITY_PANEL, PLUGINS_PANEL]
+        );
         assert!(
             panels
                 .iter()

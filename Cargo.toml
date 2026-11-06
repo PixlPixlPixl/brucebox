@@ -8,8 +8,11 @@ edition = "2024"
 [workspace]
 members = [
     "crates/brucebox-plugin-api",
+    "crates/brucebox-plugin-install",
     "crates/brucebox-plugin-loader",
+    "crates/brucebox-plugin-manifest",
     "crates/brucebox-sdk",
+    "crates/xtask",
 ]
 exclude = ["plugins"]
 resolver = "3"
@@ -31,6 +34,12 @@ path = "crates/brucebox-plugin-api"
 [dependencies.brucebox-plugin-loader]
 path = "crates/brucebox-plugin-loader"
 
+[dependencies.brucebox-plugin-install]
+path = "crates/brucebox-plugin-install"
+
+[dependencies.brucebox-plugin-manifest]
+path = "crates/brucebox-plugin-manifest"
+
 [dependencies.brucebox-sdk]
 path = "crates/brucebox-sdk"
 
@@ -39,4 +48,7 @@ version = "1"
 features = ["derive"]
 
 [dependencies.serde_json]
+version = "1"
+
+[dependencies.toml]
 version = "1"

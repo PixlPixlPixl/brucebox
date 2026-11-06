@@ -1,0 +1,21 @@
+[package]
+name = "brucebox-plugin-install"
+version = "0.1.0"
+edition = "2024"
+
+# Where plugins are installed and which ones are switched on: the user data
+# directory, the plugin roots, the config file, and the decision to load a folder
+# or skip it with a reason. No library is opened here, so the host and the
+# developer tooling share one answer to "what is installed, and may it run?".
+
+[dependencies]
+
+[dependencies.brucebox-plugin-manifest]
+path = "../brucebox-plugin-manifest"
+
+[dependencies.serde]
+version = "1"
+features = ["derive"]
+
+[dependencies.toml]
+version = "1"

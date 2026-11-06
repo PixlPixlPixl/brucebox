@@ -1,10 +1,12 @@
 //! Native plugin packages: what the host loads, and how it enters the workspace.
 //!
-//! A plugin is a folder with a manifest and a native library (SPEC §5.2). This
-//! module is the host's side of that: it scans the configured roots, loads what
-//! validates, turns each library's registration into a
-//! [`PluginDeclaration`](crate::workspace::declaration::PluginDeclaration), and
-//! records what happened so the Activity panel can say so.
+//! A plugin is a folder with a manifest and a native library (SPEC §5.2). Three
+//! modules split the work:
+//!
+//! - [`config`] — which plugins the user switched off, in a small file;
+//! - [`manager`] — the roots that are searched, and which packages may run;
+//! - this module — loading the libraries that were cleared, and turning their
+//!   registrations into workspace declarations.
 //!
 //! # Why the loader registers panels itself
 //!
@@ -20,20 +22,25 @@
 //! [`PluginSet::runtime_contributions`]: that is where its services, events and
 //! tasks live, and it is admitted by the runtime like any other plugin.
 //!
-//! # Library lifetime
+//! # Library lifetime, and what enable/disable means
 //!
 //! [`LoadedPlugin`] owns the library handle and never unloads it. The
 //! [`PluginSet`] is kept in a GPUI global for the lifetime of the application,
 //! because every function pointer, panel entity and Cordis plugin the package
 //! created points into that library.
+//!
+//! That is why switching a plugin off writes the config and asks for a restart
+//! instead of unloading the library: unloading code that the workspace may still
+//! be holding a pointer into is exactly the kind of promise this boundary does not
+//! make. The next start honours the config before any library is opened.
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use brucebox_plugin_api::RuntimeContribution;
-use brucebox_plugin_loader::{Discovery, LoadedPlugin, PluginPackage};
+use brucebox_plugin_loader::{LoadedPlugin, load};
 use gpui_kit::base::dock::PanelView;
-use gpui_kit::{App, Global, Window};
+use gpui_kit::{App, Window};
 
 use crate::runtime::PluginRuntime;
 use crate::workspace::catalog::{
@@ -43,25 +50,12 @@ use crate::workspace::catalog::{
 use crate::workspace::declaration::{PanelDeclaration, PluginDeclaration};
 use crate::workspace::panels::host::HostPanel;
 use crate::workspace::status::{self, PluginPhase};
-use crate::workspace::store;
 
-/// Environment variable naming extra plugin roots, separated by `:` (`;` on
-/// Windows). A development root usually lives here.
-pub const PLUGIN_ROOTS_ENV: &str = "BRUCEBOX_PLUGIN_DIR";
-
-/// Where the host looks for plugin folders, in order.
-///
-/// The user plugin directory comes last so a package installed by hand wins
-/// nothing: discovery refuses a duplicate id and reports the second folder, and
-/// the first root listed is the one that loads.
-pub fn roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(configured) = std::env::var_os(PLUGIN_ROOTS_ENV) {
-        roots.extend(std::env::split_paths(&configured));
-    }
-    roots.push(store::user_data_dir().join("plugins"));
-    roots
-}
+pub use brucebox_plugin_install::{
+    CONFIG_FILE_NAME, PluginConfig, PluginRoot, RootKind, Scan, config_path, data_dir,
+    user_plugin_dir,
+};
+pub use brucebox_plugin_install::{PackageReport, PackageState, roots};
 
 /// One plugin whose library is loaded and whose panels are registered.
 pub struct LoadedPackage {
@@ -86,54 +80,51 @@ impl LoadedPackage {
     }
 }
 
-/// The result of loading every configured plugin root.
+/// Every plugin the host looked at, and which of them it loaded.
 #[derive(Default)]
 pub struct PluginSet {
     loaded: Vec<LoadedPackage>,
-    problems: Vec<LoadProblem>,
+    reports: Vec<PackageReport>,
+    notes: Vec<String>,
+    config: PluginConfig,
+    config_path: PathBuf,
 }
 
 impl PluginSet {
-    /// Scan `roots` and load every valid plugin package.
+    /// Load every package the scan cleared.
     ///
-    /// One broken package never stops the others: each failure becomes a
-    /// [`LoadProblem`] that the host reports, and the workspace keeps its saved
-    /// layout with placeholders where the missing panels were.
-    pub fn load(roots: &[PathBuf]) -> Self {
-        let discovery = Discovery::scan(roots);
-        let mut set = Self::default();
+    /// One broken package never stops the others: a library that cannot be opened
+    /// or a registration that cannot be used turns that package's report into the
+    /// reason, and the workspace keeps its saved layout with placeholders where
+    /// the missing panels were.
+    pub fn activate(scan: Scan) -> Self {
+        let (packages, mut reports, notes, config, config_path) = scan.into_parts();
+        let mut loaded = Vec::new();
 
-        for problem in discovery.problems() {
-            set.problems.push(LoadProblem {
-                path: problem.path().to_path_buf(),
-                reason: problem.reason().to_owned(),
-            });
+        for package in packages {
+            let folder = package.root().to_path_buf();
+            match load(package) {
+                Ok(plugin) => match declaration_for(&plugin) {
+                    Ok(declaration) => loaded.push(LoadedPackage {
+                        plugin,
+                        declaration,
+                    }),
+                    Err((panel_type, error)) => refuse(
+                        &mut reports,
+                        &folder,
+                        format!("panel `{panel_type}` cannot be registered: {error}"),
+                    ),
+                },
+                Err(error) => refuse(&mut reports, &folder, error.reason()),
+            }
         }
 
-        for package in discovery.packages() {
-            set.load_package(package.clone());
-        }
-
-        set
-    }
-
-    fn load_package(&mut self, package: PluginPackage) {
-        let root = package.root().to_path_buf();
-        match package.load() {
-            Ok(plugin) => match declaration_for(&plugin) {
-                Ok(declaration) => self.loaded.push(LoadedPackage {
-                    plugin,
-                    declaration,
-                }),
-                Err((panel_type, error)) => self.problems.push(LoadProblem {
-                    path: root,
-                    reason: format!("panel `{panel_type}` cannot be registered: {error}"),
-                }),
-            },
-            Err(error) => self.problems.push(LoadProblem {
-                path: root,
-                reason: error.to_string(),
-            }),
+        Self {
+            loaded,
+            reports,
+            notes,
+            config,
+            config_path,
         }
     }
 
@@ -142,9 +133,33 @@ impl PluginSet {
         &self.loaded
     }
 
-    /// The packages that were skipped, and why.
-    pub fn problems(&self) -> &[LoadProblem] {
-        &self.problems
+    /// One row per folder the host looked at, including the ones it skipped.
+    pub fn reports(&self) -> &[PackageReport] {
+        &self.reports
+    }
+
+    /// Diagnostics that are not about one package.
+    pub fn notes(&self) -> &[String] {
+        &self.notes
+    }
+
+    /// The config that produced this set.
+    pub fn config(&self) -> &PluginConfig {
+        &self.config
+    }
+
+    /// The file the config was read from.
+    pub fn config_path(&self) -> &Path {
+        &self.config_path
+    }
+
+    /// Adopt a config the user just wrote.
+    ///
+    /// The loaded packages do not change — switching a plugin off takes effect at
+    /// the next start (ADR 0005: a library is never unloaded) — but the switch in
+    /// the Plugins panel has to show what the file now says, not what startup read.
+    pub fn apply_config(&mut self, config: PluginConfig) {
+        self.config = config;
     }
 
     /// The plugins that contribute their own code to the composition runtime.
@@ -177,7 +192,6 @@ impl PluginSet {
                 ) else {
                     continue;
                 };
-
                 let create = contribution.create;
                 let factory: Rc<dyn PanelFactory> = Rc::new(
                     move |request: &PanelCreateRequest,
@@ -228,24 +242,34 @@ impl PluginSet {
             }
         }
 
-        for problem in &self.problems {
+        for report in &self.reports {
+            if report.state().is_ready() {
+                continue;
+            }
+            let reason = report.state().reason().unwrap_or_default();
+            let phase = match report.state() {
+                PackageState::Disabled => PluginPhase::Disabled,
+                _ => PluginPhase::Failed,
+            };
             status::update(cx, |status| {
-                status.set_phase(
-                    problem.plugin_hint(),
-                    PluginPhase::Failed,
-                    Some(problem.reason.clone()),
-                );
-                status.note(format!(
-                    "{} was not loaded: {}",
-                    problem.path.display(),
-                    problem.reason
-                ));
+                status.set_phase(report.plugin_id(), phase, Some(reason.clone()));
             });
+        }
+
+        for note in &self.notes {
+            status::update(cx, |status| status.note(note.clone()));
         }
     }
 }
 
-impl Global for PluginSet {}
+impl gpui_kit::Global for PluginSet {}
+
+/// Replace one package's report state after loading it failed.
+fn refuse(reports: &mut [PackageReport], folder: &Path, reason: String) {
+    if let Some(report) = reports.iter_mut().find(|report| report.folder() == folder) {
+        report.set_state(PackageState::Refused { reason });
+    }
+}
 
 /// Keep the loaded packages, and with them their libraries, alive.
 pub fn install(cx: &mut App, set: PluginSet) {
@@ -259,45 +283,47 @@ pub fn loaded(cx: &App) -> Option<&PluginSet> {
     cx.try_global::<PluginSet>()
 }
 
-/// A plugin folder that was skipped.
-#[derive(Debug, Clone)]
-pub struct LoadProblem {
-    path: PathBuf,
-    reason: String,
-}
-
-impl LoadProblem {
-    /// The folder that was skipped.
-    pub fn path(&self) -> &Path {
-        &self.path
+/// Switch one plugin on or off for the *next* start.
+///
+/// The config file is re-read first, so a change made by the developer tooling
+/// while the host is running is not overwritten by a stale copy. Returns whether
+/// the value changed.
+pub fn set_enabled(cx: &mut App, plugin_id: &str, enabled: bool) -> Result<bool, String> {
+    let path = config_path();
+    let (mut config, diagnostic) = PluginConfig::load(&path);
+    if let Some(diagnostic) = diagnostic {
+        status::update(cx, |status| status.note(diagnostic));
     }
 
-    /// Why it was skipped, phrased for the status view.
-    pub fn reason(&self) -> &str {
-        &self.reason
+    let changed = config.set_enabled(plugin_id, enabled);
+    if !changed {
+        return Ok(false);
+    }
+    config
+        .save(&path)
+        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+
+    if cx.try_global::<PluginSet>().is_some() {
+        cx.global_mut::<PluginSet>().apply_config(config);
     }
 
-    /// A stable key for the status row.
-    ///
-    /// The folder name stands in for the plugin id: the reason a package fails
-    /// is often that its manifest cannot be read, so there is no id to use.
-    pub fn plugin_hint(&self) -> String {
-        self.path
-            .file_name()
-            .map(|name| format!("plugin: {}", name.to_string_lossy()))
-            .unwrap_or_else(|| format!("plugin: {}", self.path.display()))
-    }
-}
-
-/// The plugin's own saved payload, as the JSON text it wrote.
-fn restored_payload(request: &PanelCreateRequest) -> Option<String> {
-    let state = request.restored_state()?;
-    match &state.info {
-        gpui_kit::base::dock::PanelInfo::Panel(value) if !value.is_null() => {
-            serde_json::to_string(value).ok()
-        }
-        _ => None,
-    }
+    let state = if enabled {
+        PluginPhase::Pending
+    } else {
+        PluginPhase::Disabled
+    };
+    status::update(cx, |status| {
+        status.set_phase(
+            plugin_id,
+            state,
+            Some(if enabled {
+                "switched on; restart Brucebox to load it".to_owned()
+            } else {
+                "switched off; restart Brucebox to unload it".to_owned()
+            }),
+        );
+    });
+    Ok(true)
 }
 
 /// Turn a loaded library's registration into the host's declaration type.
@@ -317,7 +343,6 @@ fn declaration_for(plugin: &LoadedPlugin) -> Result<PluginDeclaration, (String, 
         );
         declaration = declaration.with_panel(declared);
     }
-
     Ok(declaration)
 }
 
@@ -326,16 +351,64 @@ pub fn factories(cx: &App) -> &PanelFactories {
     catalog::factories(cx)
 }
 
+/// The plugin's own saved payload, as the JSON text it wrote.
+fn restored_payload(request: &PanelCreateRequest) -> Option<String> {
+    let state = request.restored_state()?;
+    match &state.info {
+        gpui_kit::base::dock::PanelInfo::Panel(value) if !value.is_null() => {
+            serde_json::to_string(value).ok()
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn temp_root(name: &str) -> PathBuf {
-        let root =
-            std::env::temp_dir().join(format!("brucebox-plugins-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("the test root is created");
+        let root = std::env::temp_dir().join(format!(
+            "brucebox-plugins-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    /// Write a package whose declared library does not exist.
+    fn write_broken(root: &Path, folder: &str, id: &str, api_version: u32) {
+        let folder = root.join(folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(
+            folder.join("plugin.toml"),
+            format!(
+                r#"
+schema = 1
+
+[plugin]
+id = "{id}"
+name = "{id}"
+version = "0.1.0"
+api_version = {api_version}
+sdk_version = "0.1"
+
+[library]
+{platform} = "bin/{platform}/libmissing.so"
+"#,
+                platform = brucebox_plugin_manifest::platform_key(),
+            ),
+        )
+        .unwrap();
+    }
+
+    fn activate(root: &Path) -> PluginSet {
+        let roots = vec![PluginRoot::new(RootKind::User, root)];
+        let scan = Scan::discover(&roots, PluginConfig::default(), root.join("plugins.toml"));
+        PluginSet::activate(scan)
     }
 
     #[test]
@@ -343,75 +416,36 @@ mod tests {
         let root = temp_root("no-manifest");
         std::fs::create_dir(root.join("just-a-folder")).unwrap();
 
-        let set = PluginSet::load(std::slice::from_ref(&root));
+        let set = activate(&root);
+
         assert!(set.loaded().is_empty());
-        assert!(
-            set.problems().is_empty(),
-            "a non-plugin folder is not a problem"
-        );
+        assert!(set.reports().is_empty(), "a non-plugin folder is not a row");
+        assert!(set.notes().is_empty());
         std::fs::remove_dir_all(root).ok();
     }
 
     #[test]
     fn a_package_whose_library_is_missing_is_reported_and_does_not_stop_the_scan() {
         let root = temp_root("missing-library");
-        let broken = root.join("broken-plugin");
-        std::fs::create_dir_all(&broken).unwrap();
-        std::fs::write(
-            broken.join("plugin.toml"),
-            r#"
-schema = 1
+        write_broken(&root, "broken-plugin", "com.example.broken", 1);
 
-[plugin]
-id = "com.example.broken"
-name = "Broken"
-version = "0.1.0"
-api_version = 1
-sdk_version = "0.1"
+        let set = activate(&root);
 
-[library]
-linux-x86_64 = "bin/linux-x86_64/libbroken.so"
-"#,
-        )
-        .unwrap();
-
-        let set = PluginSet::load(std::slice::from_ref(&root));
         assert!(set.loaded().is_empty());
-        assert_eq!(set.problems().len(), 1);
-        assert!(
-            set.problems()[0].reason().contains("missing"),
-            "the reason names the missing library: {}",
-            set.problems()[0].reason()
-        );
-        assert!(set.problems()[0].plugin_hint().contains("broken-plugin"));
+        assert_eq!(set.reports().len(), 1);
+        let reason = set.reports()[0].state().reason().unwrap();
+        assert!(reason.contains("missing"), "{reason}");
         std::fs::remove_dir_all(root).ok();
     }
 
     #[test]
     fn an_incompatible_api_version_is_refused_with_both_versions_named() {
         let root = temp_root("api-version");
-        let folder = root.join("future-plugin");
-        std::fs::create_dir_all(&folder).unwrap();
-        std::fs::write(
-            folder.join("plugin.toml"),
-            r#"
-schema = 1
+        write_broken(&root, "future-plugin", "com.example.future", 99);
 
-[plugin]
-id = "com.example.future"
-name = "Future"
-version = "0.1.0"
-api_version = 99
-sdk_version = "0.1"
+        let set = activate(&root);
+        let reason = set.reports()[0].state().reason().unwrap();
 
-[library]
-linux-x86_64 = "bin/linux-x86_64/libfuture.so"
-"#,
-        )
-        .unwrap();
-
-        let set = PluginSet::load(std::slice::from_ref(&root));
-        let reason = &set.problems()[0].reason();
         assert!(reason.contains("99"), "declared version is named: {reason}");
         assert!(
             reason.contains(&brucebox_plugin_api::API_VERSION.to_string()),
@@ -423,54 +457,24 @@ linux-x86_64 = "bin/linux-x86_64/libfuture.so"
     #[test]
     fn two_folders_declaring_one_id_are_refused_rather_than_both_loaded() {
         let root = temp_root("duplicate-id");
-        for folder in ["copy-a", "copy-b"] {
-            let folder = root.join(folder);
-            std::fs::create_dir_all(&folder).unwrap();
-            std::fs::write(
-                folder.join("plugin.toml"),
-                r#"
-schema = 1
+        write_broken(&root, "copy-a", "com.example.twice", 1);
+        write_broken(&root, "copy-b", "com.example.twice", 1);
 
-[plugin]
-id = "com.example.twice"
-name = "Twice"
-version = "0.1.0"
-api_version = 1
-sdk_version = "0.1"
+        let set = activate(&root);
 
-[library]
-linux-x86_64 = "bin/linux-x86_64/libtwice.so"
-"#,
-            )
-            .unwrap();
-        }
-
-        let set = PluginSet::load(std::slice::from_ref(&root));
         assert!(set.loaded().is_empty(), "neither copy is loaded");
-
-        let reasons: Vec<&str> = set.problems().iter().map(LoadProblem::reason).collect();
+        assert_eq!(set.reports().len(), 2);
+        let reasons: Vec<String> = set
+            .reports()
+            .iter()
+            .filter_map(|report| report.state().reason())
+            .collect();
         assert!(
             reasons
                 .iter()
-                .any(|reason| reason.contains("com.example.twice")
-                    && reason.contains("already installed")),
+                .any(|reason| reason.contains("already installed")),
             "the second folder is refused by id: {reasons:?}"
         );
-        assert!(
-            reasons.iter().any(|reason| reason.contains("missing")),
-            "the first folder is still reported for its own missing library: {reasons:?}"
-        );
         std::fs::remove_dir_all(root).ok();
-    }
-
-    #[test]
-    fn roots_put_a_configured_development_root_before_the_user_directory() {
-        // The user plugin directory is always last, so a hand-installed package
-        // is never shadowed by a development root.
-        let roots = roots();
-        assert!(
-            roots.last().is_some_and(|root| root.ends_with("plugins")),
-            "the user plugin directory is the last root: {roots:?}"
-        );
     }
 }

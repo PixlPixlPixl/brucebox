@@ -609,13 +609,16 @@ name = "brucebox"
 version = "0.1.0"
 dependencies = [
  "brucebox-plugin-api",
+ "brucebox-plugin-install",
  "brucebox-plugin-loader",
+ "brucebox-plugin-manifest",
  "brucebox-sdk",
  "cordis-rs",
  "gpui-kit",
  "serde",
  "serde_json",
  "tokio",
+ "toml 1.2.0+spec-1.1.0",
 ]
 
 [[package]]
@@ -627,11 +630,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "brucebox-plugin-install"
+version = "0.1.0"
+dependencies = [
+ "brucebox-plugin-manifest",
+ "serde",
+ "toml 1.2.0+spec-1.1.0",
+]
+
+[[package]]
 name = "brucebox-plugin-loader"
 version = "0.1.0"
 dependencies = [
  "brucebox-plugin-api",
+ "brucebox-plugin-manifest",
  "libloading 0.9.0",
+]
+
+[[package]]
+name = "brucebox-plugin-manifest"
+version = "0.1.0"
+dependencies = [
+ "brucebox-plugin-api",
  "serde",
  "toml 1.2.0+spec-1.1.0",
 ]
@@ -6836,6 +6856,14 @@ name = "xmlwriter"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
+
+[[package]]
+name = "xtask"
+version = "0.1.0"
+dependencies = [
+ "brucebox-plugin-install",
+ "brucebox-plugin-manifest",
+]
 
 [[package]]
 name = "y4m"

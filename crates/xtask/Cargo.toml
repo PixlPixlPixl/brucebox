@@ -1,0 +1,20 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# The developer workflow for plugin packages. Run it as `cargo xtask plugin ...`;
+# it is never part of the application, and the host never runs it at startup.
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+[dependencies]
+
+[dependencies.brucebox-plugin-install]
+path = "../brucebox-plugin-install"
+
+[dependencies.brucebox-plugin-manifest]
+path = "../brucebox-plugin-manifest"

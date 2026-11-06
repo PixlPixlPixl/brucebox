@@ -31,6 +31,8 @@ pub enum PluginPhase {
     Failed,
     /// The plugin was disposed and its contributions withdrawn.
     Stopped,
+    /// The user switched the plugin off; it was not admitted at all.
+    Disabled,
 }
 
 impl PluginPhase {
@@ -42,6 +44,7 @@ impl PluginPhase {
             Self::Pending => "pending",
             Self::Failed => "failed",
             Self::Stopped => "stopped",
+            Self::Disabled => "disabled",
         }
     }
 }

@@ -32,6 +32,12 @@ Completed so far:
   that carries plugin contributions, typed events and lifecycle state to the
   interface as messages. Decisions in
   [`docs/adr/0004-cordis-composition-runtime.md`](docs/adr/0004-cordis-composition-runtime.md).
+- Step 6 — plugin folders and the developer workflow: a manifest schema with
+  plugin dependencies, ordered development and user roots, an on/off config, a
+  loader that turns each folder into a verdict with a reason, the Plugins panel
+  that shows those verdicts, and `cargo xtask plugin ...` for build, package,
+  install and switching. Decisions in
+  [`docs/adr/0006-plugin-folders-and-developer-workflow.md`](docs/adr/0006-plugin-folders-and-developer-workflow.md).
 - Step 5 — the native plugin boundary: a versioned plugin API, a public SDK,
   a loader that validates a folder and loads its library, and Agent Chat built
   and packaged as a separate project that the host discovers at runtime. The ABI
@@ -105,16 +111,48 @@ library. It is built in its own Cargo project — never as part of this one — 
 loaded at runtime. Adding, updating or removing one needs no host rebuild.
 
 ```sh
-# build one plugin project and package it into a plugin folder
-python3 scripts/package-plugin.py plugins/agent-chat
-
-# run the host with that folder as a plugin root
-BRUCEBOX_PLUGIN_DIR=$PWD/target/plugin-packages cargo run
+cargo xtask plugin list                 # what is installed, and may it run?
+cargo xtask plugin validate plugins/agent-chat
+cargo xtask plugin pack plugins/agent-chat      # build + package, one project
+cargo xtask plugin install target/plugin-packages/brucebox.agent-chat
+cargo xtask plugin disable brucebox.agent-chat  # also a switch in the UI
 ```
 
-The package root is `target/plugin-packages/<plugin-id>/`; a real installation
-is a copy of that folder into a configured root (`BRUCEBOX_PLUGIN_DIR`, or
-`<user data dir>/plugins`). Startup never runs Cargo.
+`pack` builds that one project (never the host) into
+`target/plugin-packages/<plugin-id>/`; `install` copies the folder into the user
+plugin root. An installation is a plain folder copy, so it can be produced
+anywhere and copied in. Startup never runs Cargo.
+
+Roots are searched in order: `BRUCEBOX_PLUGIN_DIR` (`:`-separated development
+roots) first, then `<user data dir>/plugins`. A plugin id may be installed once —
+the first folder wins and the shadowed copy is reported, so a development copy
+reliably shadows an installed one.
+
+### Switching a plugin on and off
+
+`plugins.toml` in the data directory lists the ids that are *off*; anything not
+listed is on, which is what makes installing a folder enough. The **Plugins**
+panel shows one row per folder the host looked at — ready, disabled, refused with
+the reason, or missing a dependency — and its switch writes that file.
+
+A switch takes effect on the next start, and the panel says so while it is
+pending. Unloading a library that the open workspace may still be holding a
+pointer into is not something this boundary promises (ADR 0005), so "off" means
+"not admitted next time", not "unloaded now".
+
+### Dependencies
+
+A manifest may require other plugins by id, with an optional version prefix:
+
+```toml
+[dependencies]
+requires = ["brucebox.git", "brucebox.workspace@0.1"]
+```
+
+Requirements are checked at discovery against the plugins that are installed and
+enabled. A dependency that is missing, switched off, or at another version keeps
+the depending plugin out of the workspace with a reason that names it. Whether a
+required *service* is actually published remains Cordis's business at runtime.
 
 A plugin project depends on `brucebox-sdk`, declares its panels and its Cordis
 contribution, and exports one symbol:
@@ -170,9 +208,12 @@ there is no special case for built-in contributions.
 
 ```text
 crates/
-├── brucebox-plugin-api/    the versioned host/plugin boundary (repr(C), pinned)
-├── brucebox-plugin-loader/ plugin folder discovery, manifests, library loading
-└── brucebox-sdk/           what a plugin project depends on
+├── brucebox-plugin-api/     the versioned host/plugin boundary (repr(C), pinned)
+├── brucebox-plugin-manifest/ the folder format: manifest, versions, dependencies
+├── brucebox-plugin-install/  roots, plugins.toml, per-folder verdicts
+├── brucebox-plugin-loader/   opening a library and validating its registration
+├── brucebox-sdk/             what a plugin project depends on
+└── xtask/                    the developer workflow: list, validate, pack, install
 
 plugins/
 └── agent-chat/             a first-party plugin, built as its own project
@@ -222,3 +263,5 @@ only through the catalog and a layout.
   loads a library or resolves a symbol.
 - A plugin panel renders whatever it likes; its input arrives from the host as
   plain data, because GPUI's own listeners cannot fire across the boundary.
+- Tooling and host read one parser: a package cannot be built that the host reads
+  differently, and a switch in the panel and `cargo xtask` write the same file.
