@@ -435,6 +435,10 @@ Do not choose an interface that only supports metadata or serialized UI descript
 
 Keep unsafe code limited to the loader/boundary and document its invariants. Do not claim the plugin system is a security sandbox: native plugins are trusted in-process code with the privileges of Brucebox.
 
+**Measured result (step 5).** The gate was run, and it constrains the design in one specific way. Two builds with the same pinned toolchain and the same `gpui-kit`/`cordis-rs` versions but different dependency graphs produce **different `TypeId`s for the same type** in one process. GPUI delivers an event by downcasting it through `Any`, so a plugin's own `on_key_down`/`on_click` listeners never run, and a plugin cannot use a host-defined global or `EventEmitter` event type. Everything that is a vtable call or plain data — `Arc<dyn PanelView>`, plugin-owned entities, structs, enums, the rendering pipeline the plugin drives — crosses fine.
+
+The resolution is explicit rather than silent: the host owns the input handlers (host compilation, where dispatch works) and forwards key and pointer events to a plugin panel as plain data through `PluginPanelInput`; plugin layout and painting stay unrestricted. The contract this depends on is narrow and checked — same toolchain, same pinned GPUI Kit and Cordis, same plugin API and SDK version — and a package declaring anything else is rejected before its code is called. See [`docs/adr/0005-native-plugin-boundary.md`](docs/adr/0005-native-plugin-boundary.md).
+
 ### 5.5 Building, installing and updating plugins
 
 Plugin development is separate from host development.

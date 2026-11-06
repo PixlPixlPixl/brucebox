@@ -1,0 +1,24 @@
+[package]
+name = "brucebox-agent-chat"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# A standalone plugin project: deliberately not a member of the host workspace.
+# The host never compiles this crate; it loads the packaged library at runtime.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+# The plugin pins the same facade versions the host pins, so the types that cross
+# the boundary (GPUI entities, Cordis contracts) are the same types on both
+# sides. `brucebox-sdk` re-exports both, but naming them here keeps the versions
+# visible in this project and makes the derive macros resolve `::gpui_kit` paths
+# in this crate.
+[dependencies]
+brucebox-sdk = { path = "../../crates/brucebox-sdk" }
+gpui-kit = { version = "=0.9.0", default-features = false }
+cordis-rs = { version = "=0.11.1" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

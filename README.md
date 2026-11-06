@@ -32,6 +32,11 @@ Completed so far:
   that carries plugin contributions, typed events and lifecycle state to the
   interface as messages. Decisions in
   [`docs/adr/0004-cordis-composition-runtime.md`](docs/adr/0004-cordis-composition-runtime.md).
+- Step 5 — the native plugin boundary: a versioned plugin API, a public SDK,
+  a loader that validates a folder and loads its library, and Agent Chat built
+  and packaged as a separate project that the host discovers at runtime. The ABI
+  gate was measured, not assumed; decisions and the measured constraint are in
+  [`docs/adr/0005-native-plugin-boundary.md`](docs/adr/0005-native-plugin-boundary.md).
 
 ## Build and run
 
@@ -93,6 +98,54 @@ panel — no recreation, no state loss.
 Dragging a panel across surfaces is not wired yet; the transfer seam it needs is
 in place (see ADR 0003).
 
+## Plugins
+
+A plugin is a folder: a `plugin.toml` manifest plus a platform-specific native
+library. It is built in its own Cargo project — never as part of this one — and
+loaded at runtime. Adding, updating or removing one needs no host rebuild.
+
+```sh
+# build one plugin project and package it into a plugin folder
+python3 scripts/package-plugin.py plugins/agent-chat
+
+# run the host with that folder as a plugin root
+BRUCEBOX_PLUGIN_DIR=$PWD/target/plugin-packages cargo run
+```
+
+The package root is `target/plugin-packages/<plugin-id>/`; a real installation
+is a copy of that folder into a configured root (`BRUCEBOX_PLUGIN_DIR`, or
+`<user data dir>/plugins`). Startup never runs Cargo.
+
+A plugin project depends on `brucebox-sdk`, declares its panels and its Cordis
+contribution, and exports one symbol:
+
+```rust
+declare_plugin!(Plugin::new("com.example.hello", "Hello", "0.1.0")
+    .panel("main", "Hello", create));
+```
+
+`plugins/agent-chat` is the working example: a real GPUI conversation panel with
+a composer, its own persisted state, and a session service published into the
+host's composition runtime.
+
+### What a plugin must match
+
+The pinned toolchain, the pinned `gpui-kit` and `cordis-rs`, and the plugin API
+version. The host refuses a package that declares anything else, with the
+declared and supported versions named. A native plugin is trusted in-process
+code with the privileges of Brucebox; this is a compatibility contract, not a
+sandbox.
+
+### What crosses the boundary
+
+Rendering crosses freely: a plugin builds real GPUI entities and elements, and
+the host renders them. **Input does not**, and not by choice — GPUI delivers an
+event by downcasting it inside `Any`, and the same type has a different `TypeId`
+in two separately compiled libraries, so a plugin's own `on_key_down` or
+`on_click` would never run. The host keeps the handlers and forwards key and
+pointer events to the plugin as plain data (`PluginPanelInput`). See ADR 0005
+for the measurement and the consequences.
+
 ## Composition runtime
 
 There is one Cordis runtime, owned by the host, on its own worker threads
@@ -116,10 +169,19 @@ there is no special case for built-in contributions.
 ## Layout
 
 ```text
+crates/
+├── brucebox-plugin-api/    the versioned host/plugin boundary (repr(C), pinned)
+├── brucebox-plugin-loader/ plugin folder discovery, manifests, library loading
+└── brucebox-sdk/           what a plugin project depends on
+
+plugins/
+└── agent-chat/             a first-party plugin, built as its own project
+
 src/
 ├── main.rs                 binary: GPUI bootstrap, then the host window
 ├── lib.rs                  host library
 ├── app.rs                  application shell
+├── plugins/                host side of plugin folders: load, declare, report
 ├── runtime/
 │   ├── mod.rs              the host-owned Cordis runtime and its lifecycle
 │   ├── contract.rs         the workspace service and typed events
@@ -156,3 +218,7 @@ only through the catalog and a layout.
 - Missing or failed plugins show placeholders and keep persisted layout state.
 - The workspace learns about panels and plugin lifecycle as data; only
   `runtime/` names a Cordis type.
+- Plugin projects are separate builds. Only `crates/brucebox-plugin-loader`
+  loads a library or resolves a symbol.
+- A plugin panel renders whatever it likes; its input arrives from the host as
+  plain data, because GPUI's own listeners cannot fire across the boundary.

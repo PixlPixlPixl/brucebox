@@ -3,6 +3,17 @@ name = "brucebox"
 version = "0.1.0"
 edition = "2024"
 
+# The host and its support crates. Plugin *projects* live under `plugins/` and
+# are deliberately excluded: they are separate Cargo builds, loaded at runtime.
+[workspace]
+members = [
+    "crates/brucebox-plugin-api",
+    "crates/brucebox-plugin-loader",
+    "crates/brucebox-sdk",
+]
+exclude = ["plugins"]
+resolver = "3"
+
 [dependencies.gpui-kit]
 version = "=0.9.0"
 default-features = false
@@ -13,6 +24,15 @@ version = "=0.11.1"
 [dependencies.tokio]
 version = "1"
 features = ["rt-multi-thread", "sync", "time", "macros"]
+
+[dependencies.brucebox-plugin-api]
+path = "crates/brucebox-plugin-api"
+
+[dependencies.brucebox-plugin-loader]
+path = "crates/brucebox-plugin-loader"
+
+[dependencies.brucebox-sdk]
+path = "crates/brucebox-sdk"
 
 [dependencies.serde]
 version = "1"

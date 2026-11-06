@@ -1,0 +1,15 @@
+[package]
+name = "brucebox-plugin-api"
+version = "0.1.0"
+edition = "2024"
+
+# The versioned host/plugin boundary. Everything here is deliberately narrow:
+# plain data plus a few function pointers whose signatures name the pinned GPUI
+# and Cordis types (see `src/lib.rs` for the compatibility contract).
+
+[dependencies.gpui-kit]
+version = "=0.9.0"
+default-features = false
+
+[dependencies.cordis-rs]
+version = "=0.11.1"

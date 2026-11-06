@@ -29,6 +29,7 @@
 
 use std::sync::Arc;
 
+use brucebox_plugin_api::{PluginPanelInput, PointerButton, PointerPhase};
 use gpui_kit::base::dock::{Panel, PanelEvent, PanelInfo, PanelState, PanelView, TabGroup};
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
@@ -43,6 +44,9 @@ pub struct HostPanel {
     panel_name: &'static str,
     focus_handle: FocusHandle,
     inner: Arc<dyn PanelView>,
+    /// How this panel hears about input, for a panel that came from a plugin
+    /// library. `None` for a host panel, which handles its own events.
+    input: Option<Arc<dyn PluginPanelInput>>,
     /// Set while the workspace is moving this panel to another dock area.
     transferring: bool,
 }
@@ -57,6 +61,7 @@ impl HostPanel {
             panel_name,
             focus_handle,
             inner,
+            input: None,
             transferring: false,
         })
     }
@@ -68,6 +73,30 @@ impl HostPanel {
         cx: &mut App,
     ) -> Arc<dyn PanelView> {
         Arc::new(Self::new(identity, inner, cx))
+    }
+
+    /// Wrap a panel from a plugin library, which may want forwarded input.
+    ///
+    /// A plugin's own click and key listeners cannot run: GPUI dispatches an
+    /// event by downcasting it inside `Any`, and the same type has different
+    /// `TypeId`s in two separately compiled libraries. So the host keeps the
+    /// input handlers (its own code, where dispatch works) and forwards what
+    /// happened as plain data — see [`PluginPanelInput`].
+    pub fn plugin(
+        identity: PanelIdentity,
+        parts: brucebox_plugin_api::PanelParts,
+        cx: &mut App,
+    ) -> Arc<dyn PanelView> {
+        let focus_handle = cx.focus_handle();
+        let panel_name = identity.panel_type().as_static_str();
+        Arc::new(cx.new(|_| Self {
+            identity,
+            panel_name,
+            focus_handle,
+            inner: parts.view,
+            input: parts.input,
+            transferring: false,
+        }))
     }
 
     /// The type and instance id of the wrapped panel.
@@ -124,6 +153,14 @@ impl Panel for HostPanel {
     }
 
     fn set_active(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
+        // A plugin panel's keyboard focus belongs to this wrapper, because this
+        // wrapper is where the (host-side) input handlers live.
+        if self.input.is_some() {
+            if active {
+                self.focus_handle.focus(window, cx);
+            }
+            return;
+        }
         self.inner.set_active(active, window, cx);
     }
 
@@ -159,6 +196,30 @@ impl Panel for HostPanel {
     }
 }
 
+impl HostPanel {
+    /// Forward one pointer event to the plugin panel, if it wants input.
+    fn forward_pointer(
+        &self,
+        position: gpui_kit::Point<gpui_kit::Pixels>,
+        button: PointerButton,
+        phase: PointerPhase,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let Some(input) = self.input.clone() else {
+            return;
+        };
+        let forwarded =
+            brucebox_plugin_api::PluginInput::Pointer(brucebox_plugin_api::PointerInput {
+                x: f32::from(position.x),
+                y: f32::from(position.y),
+                button,
+                phase,
+            });
+        input.handle_input(&forwarded, window, cx);
+    }
+}
+
 impl EventEmitter<PanelEvent> for HostPanel {}
 
 impl Focusable for HostPanel {
@@ -168,8 +229,60 @@ impl Focusable for HostPanel {
 }
 
 impl Render for HostPanel {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        self.inner.view()
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let inner = self.inner.view();
+        if self.input.is_none() {
+            return div().size_full().child(inner);
+        }
+
+        // The panel came from a plugin library: this wrapper is the input
+        // surface. Keys and pointer events are read here, in the host's own
+        // compilation, and forwarded as plain data.
+        div()
+            .size_full()
+            .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(|panel, event: &KeyDownEvent, window, cx| {
+                let Some(input) = panel.input.clone() else {
+                    return;
+                };
+                let keystroke = &event.keystroke;
+                let forwarded =
+                    brucebox_plugin_api::PluginInput::Key(brucebox_plugin_api::KeyInput {
+                        key: &keystroke.key,
+                        key_char: keystroke.key_char.as_deref(),
+                        control: keystroke.modifiers.control,
+                        alt: keystroke.modifiers.alt,
+                        shift: keystroke.modifiers.shift,
+                        platform: keystroke.modifiers.platform,
+                    });
+                input.handle_input(&forwarded, window, cx);
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|panel, event: &MouseDownEvent, window, cx| {
+                    panel.focus_handle.focus(window, cx);
+                    panel.forward_pointer(
+                        event.position,
+                        PointerButton::Left,
+                        PointerPhase::Down,
+                        window,
+                        cx,
+                    );
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|panel, event: &MouseUpEvent, window, cx| {
+                    panel.forward_pointer(
+                        event.position,
+                        PointerButton::Left,
+                        PointerPhase::Up,
+                        window,
+                        cx,
+                    );
+                }),
+            )
+            .child(inner)
     }
 }
 

@@ -1,0 +1,19 @@
+[package]
+name = "brucebox-sdk"
+version = "0.1.0"
+edition = "2024"
+
+# The public plugin development interface. A plugin project depends on this and
+# nothing else from Brucebox; it is not a member of the host's build.
+
+[dependencies]
+
+[dependencies.brucebox-plugin-api]
+path = "../brucebox-plugin-api"
+
+[dependencies.gpui-kit]
+version = "=0.9.0"
+default-features = false
+
+[dependencies.cordis-rs]
+version = "=0.11.1"

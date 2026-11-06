@@ -6,5 +6,6 @@
 //! they arrive through the catalog, as declarations the runtime carries.
 
 pub mod app;
+pub mod plugins;
 pub mod runtime;
 pub mod workspace;

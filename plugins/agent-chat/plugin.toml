@@ -1,0 +1,25 @@
+# Brucebox plugin package manifest.
+#
+# The host reads this before it loads the library: schema, identity and the
+# compatibility it was built against are checked first, so an incompatible
+# package is refused with a message instead of being called into.
+
+schema = 1
+
+[plugin]
+id = "brucebox.agent-chat"
+name = "Agent Chat"
+version = "0.1.0"
+description = "A native conversation panel with a composer and a session service."
+api_version = 1
+sdk_version = "0.1"
+
+# One native library per platform. The loader picks the entry for the running
+# OS and architecture; a package that has no entry for this platform is reported
+# as incompatible rather than silently skipped.
+[library]
+linux-x86_64 = "bin/linux-x86_64/libbrucebox_agent_chat.so"
+linux-aarch64 = "bin/linux-aarch64/libbrucebox_agent_chat.so"
+macos-aarch64 = "bin/macos-aarch64/libbrucebox_agent_chat.dylib"
+macos-x86_64 = "bin/macos-x86_64/libbrucebox_agent_chat.dylib"
+windows-x86_64 = "bin/windows-x86_64/brucebox_agent_chat.dll"

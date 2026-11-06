@@ -310,6 +310,19 @@ impl Inner {
     }
 }
 
+/// One plugin's own code, ready to be admitted into the runtime.
+///
+/// The loader reads this out of a plugin library without knowing anything about
+/// Cordis: it is a plugin id and the function that seals that plugin's
+/// contribution. The host calls the function and owns the resulting fiber.
+#[derive(Clone, Copy)]
+pub struct PluginRuntime {
+    /// The plugin's stable id; also its name in the runtime and status view.
+    pub plugin_id: &'static str,
+    /// Seals the plugin's contribution. Called once, on the application thread.
+    pub contribution: brucebox_plugin_api::RuntimeContribution,
+}
+
 /// The runtime plus the task that drains its mailbox, as one application global.
 ///
 /// The task is held here for one reason: dropping a GPUI [`Task`] cancels it, and
@@ -333,7 +346,7 @@ pub fn runtime(cx: &App) -> Option<&HostRuntime> {
 /// against the catalog, and the catalog has to have the contributions in it
 /// before that happens. Anything a plugin publishes after this point still
 /// arrives, through the drain task.
-pub fn install(cx: &mut App) -> Result<(), CompositionError> {
+pub fn install(cx: &mut App, plugins: &[PluginRuntime]) -> Result<(), CompositionError> {
     status::init(cx);
 
     let (mailbox, mut inbox) = UiInbox::channel();
@@ -350,6 +363,24 @@ pub fn install(cx: &mut App) -> Result<(), CompositionError> {
         PROVING_PLUGIN,
         composition::ProvingContributions::prepared(contributions::proving_declaration()),
     )?;
+
+    // Plugins loaded from folders. Their panels are already registered (the
+    // loader has the factories and the application thread); what is admitted
+    // here is their own code — services, events, tasks — into the one runtime.
+    for plugin in plugins {
+        match runtime.start_plugin(plugin.plugin_id, (plugin.contribution)()) {
+            Ok(phase) => {
+                mailbox.phase(plugin.plugin_id, phase, None);
+            }
+            Err(error) => {
+                mailbox.phase(
+                    plugin.plugin_id,
+                    PluginPhase::Failed,
+                    Some(error.to_string()),
+                );
+            }
+        }
+    }
 
     // Apply startup's messages here, synchronously, so the first frame already
     // knows about every panel the runtime just contributed.
@@ -438,10 +469,18 @@ mod tests {
             PluginPhase::Active
         );
 
+        // Wait for both the declaration and the generation-owned task's first
+        // report: they are published by the same apply, but in either order.
         let messages = wait_for(&mut inbox, Duration::from_secs(5), |messages| {
             messages
                 .iter()
                 .any(|message| matches!(message, UiMessage::Declared(_)))
+                && messages.iter().any(|message| {
+                    matches!(
+                        message,
+                        UiMessage::Note(note) if note.contains("tick 0")
+                    )
+                })
         });
 
         let declared = messages
